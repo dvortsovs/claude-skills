@@ -1,6 +1,6 @@
 ---
 name: stand-check
-description: Verify the current implementation on the developer's own live dev stand in a real browser — asks which installation (YC / YT / other) and which auth file to use, resolves the stand address from the developer's nginx config, stops every running dev stand process, starts a fresh stand, drives the UI with agent-browser, then shuts the stand down and reports. Use whenever the user says «проверить на стенде», «проверь на стенде», «проверка на стенде», «посмотри на стенде», "check on the stand", "verify on the dev stand", or otherwise asks to see a change working on their stand — even when they name neither agent-browser nor the start command.
+description: Verify the current implementation on the developer's own live dev stand in a real browser — asks which installation (YC / YT, native on a dev VM or docker on a local machine / other) and which auth file to use, resolves the stand address from the developer's nginx config or the compose template, stops every running dev stand process, starts a fresh stand, drives the UI with agent-browser, then shuts the stand down and reports. Use whenever the user says «проверить на стенде», «проверь на стенде», «проверка на стенде», «посмотри на стенде», "check on the stand", "verify on the dev stand", or otherwise asks to see a change working on their stand — even when they name neither agent-browser nor the start command.
 ---
 
 # Stand check
@@ -13,31 +13,38 @@ Scripts live in `scripts/` next to this file: `<skill-dir>` below is the base di
 
 ## 1. Resolve the parameters, then ask
 
-Every developer's stand has its own address: `server_name` in the generated `projects/yandex/dev-nginx/nginx.conf` of the DataLens repo declares both the YT and the YC host (see `docs/dev/setup.md` there). Resolve it first, so the question shows the user their real addresses:
+A stand runs in one of two ways, and every developer's stand has its own address:
+
+- **native** (a dev VM): nginx and `tvmtool` on the host, the address is `server_name` in the generated `projects/yandex/dev-nginx/nginx.conf` of the DataLens repo (`docs/dev/setup.md` there);
+- **docker** (a local machine, laptop): app, nginx and `tvmtool` run as containers of the compose project `datalens-ui-yandex`, the nginx container listens on 443 of the machine, the address comes from the compose nginx template (`projects/yandex/dev/docker/nginx.conf`: `<PROJECT_NAME>.<user>.<suffix>`, `docs/dev/running.md` → «Docker-режимы»).
+
+Resolve everything first, so the question shows the user their real commands and addresses:
 
 ```bash
-bash <skill-dir>/scripts/stand-config.sh yc
-bash <skill-dir>/scripts/stand-config.sh yt
+bash <skill-dir>/scripts/stand-config.sh detect        # DEFAULT=yc (host nginx config exists) or yc-docker
+bash <skill-dir>/scripts/stand-config.sh yc            # likewise yt, yc-docker, yt-docker
 ```
 
-Each prints `COMMAND`, `URL`, `HOST_SOURCE`, `COOKIE_DOMAIN`, `AUTH_FILE` and `NEEDS_TVM`:
+Each prints `MODE`, `COMMAND`, `URL`, `HOST_SOURCE`, `RESOLVES_TO`, `COOKIE_DOMAIN`, `AUTH_FILE`, `NEEDS_TVM` and `WARNING`:
 
 | Installation | Start command | Address | Cookie domain |
 |---|---|---|---|
-| **YC** (default) | `pnpm run yc:dev` | `https://<user>.dev.preprod.datalens.ru` | `.preprod.datalens.ru` |
-| **YT** | `pnpm run yt:dev` | `https://<CONFIG_NAME>.<user>.ui.yandex-team.ru` | `.yandex-team.ru` — needs a healthy `tvmtool`, step 3b |
+| **YC** | `pnpm run yc:dev` | `https://<user>.dev.preprod.datalens.ru` | `.preprod.datalens.ru` |
+| **YT** | `pnpm run yt:dev` | `https://<CONFIG_NAME>.<user>.ui.yandex-team.ru` | `.yandex-team.ru` — needs a healthy host `tvmtool`, step 3b |
+| **YC docker** | `pnpm run yc:dev:docker:no-typecheck` | `https://<PROJECT_NAME>.<user>.dev.preprod.datalens.ru` | `.preprod.datalens.ru` |
+| **YT docker** | `pnpm run yt:dev:docker:no-typecheck` | `https://<PROJECT_NAME>.<user>.ui.yandex-team.ru` | `.yandex-team.ru` — `tvmtool` is a container, step 3b does not apply |
 | Other | ask the user | ask the user | parent domain shared by the stand host and the auth file's host |
 
-`STAND_URL` and `STAND_AUTH_FILE` in the environment override the resolved values. When the script exits 1 (no nginx config, no override), the address is unknown — ask for it, do not guess.
+The recommended option is what `detect` says: native where the host nginx config exists, docker otherwise. `STAND_URL`, `STAND_AUTH_FILE` and `PROJECT_NAME` in the environment override the resolved values. When the script exits 1 (no nginx config, no override), the address is unknown — ask for it, do not guess. A non-empty `WARNING` (the docker host resolves to another machine, or not at all — on a laptop it has to point at `127.0.0.1`, usually through `/etc/hosts`) means the address must be confirmed with the user, in the same question: put the warning into the option's description.
 
 The default auth file is `projects/yandex/tests/artifacts/auth.txt` (gitignored, per developer): a raw `curl` command copied from the browser's devtools, re-exported when it goes stale. A Playwright `storageState` JSON or a `Cookie:` header file works too.
 
-Ask both questions in a single `AskUserQuestion` call, in the user's language, with the default first and the resolved values in the descriptions:
+Ask both questions in a single `AskUserQuestion` call, in the user's language, with the recommended option first and the resolved values in the descriptions:
 
-- **Окружение** — «На каком окружении проверять?»: `YC (Recommended)` — `<COMMAND>`, `<URL>`; `YT` — `<COMMAND>`, `<URL>`. The built-in "Other" answer covers a different environment: the user types the start command and the address there. If either is missing from what they typed, ask for it before going on.
+- **Окружение** — «На каком окружении проверять?»: `YC`, `YT`, `YC docker (локальная машина)`, `YT docker` — each with `<COMMAND>` and `<URL>` in the description, the recommended one marked `(Recommended)`. The built-in "Other" answer covers a different environment: the user types the start command and the address there. If either is missing from what they typed, ask for it before going on.
 - **Авторизация** — «Какой файл использовать для авторизации?»: `<AUTH_FILE> (Recommended)`; `Другой файл` — the user gives the path.
 
-Skip a question only when the user's request already answers it ("проверь на YT стенде" settles the installation, the auth file is still asked). If `AskUserQuestion` is not available (you run as a subagent), take the defaults and say in the report that you did.
+Skip a question only when the user's request already answers it ("проверь на YT стенде" settles the installation, "в докере" / "локально" settles the mode; the auth file is still asked). If `AskUserQuestion` is not available (you run as a subagent), take the defaults and say in the report that you did.
 
 ## 2. Decide what to check
 
@@ -68,9 +75,9 @@ bash -c "$(cat <auth-file>) -k -s -o /dev/null -w '%{http_code}\n'"    # 200 = s
 - The host belongs to a different installation than the chosen one (a `preprod.datalens.ru` export for a YT check) — the cookies will not authenticate there. Tell the user and ask for the right file.
 - The file is not a curl command (`storageState` JSON, `Cookie:` header) — skip the curl check; `cookies set --curl` in step 5 detects these formats itself. For JSON, check that the cookies' `expires` are in the future.
 
-## 3b. YT only: make sure TVM is healthy
+## 3b. Native YT only: make sure TVM is healthy
 
-The YT installation reaches internal services through a local `tvmtool` daemon (`NEEDS_TVM=1` from `stand-config.sh`). Its config and daemon token come from Secretnica and go stale: when they do, the stand starts but every request to US and the other backends fails, which looks like a broken implementation. Check the daemon before starting the stand, on your own, without asking the user — but do not refresh it blindly on every run, a restart of `tvmtool` is noise when nothing is wrong:
+The YT installation reaches internal services through a local `tvmtool` daemon. In native mode that is a daemon on the host (`NEEDS_TVM=1` from `stand-config.sh`); in docker mode it is the `tvmtool` container, fed from `.env` by the compose file, so there is nothing on the host to check or refresh and this step is skipped (`NEEDS_TVM=0`). Its config and daemon token come from Secretnica and go stale: when they do, the stand starts but every request to US and the other backends fails, which looks like a broken implementation. Check the daemon before starting the stand, on your own, without asking the user — but do not refresh it blindly on every run, a restart of `tvmtool` is noise when nothing is wrong:
 
 ```bash
 bash <skill-dir>/scripts/ensure-tvm.sh            # ENV=production in front for a prod-facing stand
@@ -82,17 +89,17 @@ The script compares the daemon state (`/tvm/ping` answering `OK`) and the files 
 - `1` — refreshed, still broken: the output has the commands to inspect the service. Stop and report, the stand would not work.
 - `2` — a prerequisite is missing (tvmtool not installed, no passwordless `sudo`, `yav` not logged in): the output has the exact command for the user. This is the one case that needs them.
 
-Skip this step entirely for YC: `TVM_DISABLED` there, see `docs/dev/installations.md`. The procedure the script automates is documented at https://wiki.yandex-team.ru/ct/lib/rabota-s-tvm-pri-razrabotke/.
+Skip this step entirely for YC (`TVM_DISABLED` there, see `docs/dev/installations.md`) and for both docker modes. The procedure the script automates is documented at https://wiki.yandex-team.ru/ct/lib/rabota-s-tvm-pri-razrabotke/.
 
 ## 4. Stop every running stand, then start a fresh one
 
-Stop **all** dev stand processes before starting, including ones started outside this session or by the user. YT, YC and Public share one nginx host, and a stale instance keeps `dist/run/*.sock` bound, so nginx answers 502 for the new stand or, worse, serves the old code — the check then verifies something other than the current implementation. Stands left running also pile up and eat memory until a build gets OOM-killed.
+Stop **all** dev stands before starting, including ones started outside this session or by the user — native processes and docker-mode containers alike. YT, YC and Public share one nginx host, and a stale instance keeps `dist/run/*.sock` bound (in docker mode: the ports and the 443 of the nginx container), so nginx answers 502 for the new stand or, worse, serves the old code — the check then verifies something other than the current implementation. Stands left running also pile up and eat memory until a build gets OOM-killed.
 
 ```bash
 bash <skill-dir>/scripts/stop-stand.sh <stand-url>
 ```
 
-The script finds the processes (pnpm chain, `app-builder dev`, ts-checker, the node server), kills them by pid and confirms nothing is left. Use it rather than `pkill -f '<pattern>'`: `pkill -f` matches the shell command line that contains the pattern and kills your own shell. For an "Other" environment whose start command the default patterns would miss, add `--pattern '<ere>'`. `--dry-run` only shows what would be stopped.
+The script finds the processes (pnpm chain, `app-builder dev`, ts-checker, the node server), kills them by pid, stops the containers of the compose project `datalens-ui-yandex` (through `sudo -n docker` when the socket is root-only) and confirms nothing is left. Use it rather than `pkill -f '<pattern>'`: `pkill -f` matches the shell command line that contains the pattern and kills your own shell. For an "Other" environment whose start command the default patterns would miss, add `--pattern '<ere>'`. `--dry-run` only shows what would be stopped.
 
 Then start the stand from the repo root as a background task, with the log in the scratchpad, and wait for it as a second background task:
 
@@ -102,6 +109,7 @@ bash <skill-dir>/scripts/wait-stand.sh <stand-url>   # run_in_background, exits 
 ```
 
 - If the stand task exits before `wait-stand.sh` reports success, the start failed — read the tail of `stand.log`.
+- Docker mode is slower to come up: `docker-entry.js` first compares `pnpm-lock.yaml` with its saved hash and runs `pnpm install` inside the container when it changed, and the first run builds the image. Give `wait-stand.sh` a timeout of 1800 there. The address answers `000` (connection refused) until the nginx container is up and `502` until the app is.
 - "Stand is up" means nginx reaches the server. The client bundle may still be compiling: a blank page or a "compiling" overlay right after start means wait and reload, not a bug.
 - Do not run `pnpm typecheck` next to a running stand — together they run out of memory. Typecheck and lint belong after the stand is stopped.
 
@@ -136,7 +144,7 @@ agent-browser --session <name> close
 bash <skill-dir>/scripts/stop-stand.sh <stand-url>
 ```
 
-The script must end with no processes left, no `dist/run` listeners and the stand answering 502. Do this before writing the report, so the report can state it as done.
+The script must end with no processes left, no containers left, no `dist/run` listeners and the stand answering 502 (or 000, once the docker nginx is gone). Do this before writing the report, so the report can state it as done.
 
 ## 8. Report
 

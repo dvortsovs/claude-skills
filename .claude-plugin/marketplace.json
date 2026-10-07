@@ -9,7 +9,7 @@
     {
       "name": "dvortsovs",
       "source": "./plugins/dvortsovs",
-      "description": "dvortsovs's personal skill namespace. Ships stand-check (invoked as dvortsovs:stand-check, or on its own when the user asks to «проверить на стенде»): verifies the current change in a real browser on the developer's own DataLens dev stand — asks YC / YT and the auth file, resolves the stand address from dev-nginx/nginx.conf, refreshes TVM for YT only when stale, stops every running stand, starts a fresh one, drives the UI with agent-browser, stops the stand and reports with evidence. More skills will be added here over time.",
+      "description": "dvortsovs's personal skill namespace. Ships stand-check (invoked as dvortsovs:stand-check, or on its own when the user asks to «проверить на стенде»): verifies the current change in a real browser on the developer's own DataLens dev stand — asks YC / YT and the auth file, resolves the stand address from dev-nginx/nginx.conf or the docker compose template, refreshes TVM for YT only when stale, stops every running stand, starts a fresh one, drives the UI with agent-browser, stops the stand and reports with evidence. More skills will be added here over time.",
       "keywords": ["dvortsovs", "datalens", "stand", "dev-stand", "agent-browser", "e2e", "tvm", "yandex"]
     }
   ]

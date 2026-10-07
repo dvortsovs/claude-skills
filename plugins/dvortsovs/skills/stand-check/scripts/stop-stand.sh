@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Stop every DataLens dev stand process of the current user, whoever started it.
+# Stop every DataLens dev stand of the current user, whoever started it: native processes and the
+# docker-mode containers (compose project datalens-ui-yandex).
 #
 #   stop-stand.sh [--list|--dry-run] [--pattern <ere>] [stand-url]
 #
@@ -9,7 +10,8 @@
 #
 # Processes are killed by pid (TERM, then KILL), never with `pkill -f`: a `pkill -f` pattern
 # matches the shell that runs it. The shell chain running this script is always spared.
-# Exit code 0 means no stand process and no dist/run socket listener is left.
+# Containers are stopped with `docker stop` (through `sudo -n` when the socket needs it).
+# Exit code 0 means no stand process, no container and no dist/run socket listener is left.
 set -u
 
 PATTERN='(yc|yt|public|ent):dev|app-builder/dist/cli\.js|dist/yandex/src/server/index\.js|ts-checker'
@@ -17,9 +19,10 @@ LIST_ONLY=0
 URL=''
 TERM_WAIT_STEPS=20
 MAX_ROUNDS=3
+COMPOSE_PROJECT='datalens-ui-yandex'
 
 usage() {
-    sed -n '2,12p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,14p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 while [ $# -gt 0 ]; do
@@ -77,6 +80,26 @@ show() {
     ps -o pid=,etime=,args= -p $(echo "$@" | tr ' ' ',') 2>/dev/null | cut -c1-220
 }
 
+# `docker` itself, or through sudo when the socket is root-only; empty when docker is unusable here
+DOCKER=''
+if command -v docker >/dev/null 2>&1; then
+    if docker ps -q >/dev/null 2>&1; then
+        DOCKER='docker'
+    elif sudo -n docker ps -q >/dev/null 2>&1; then
+        DOCKER='sudo -n docker'
+    fi
+fi
+
+find_containers() {
+    [ -n "$DOCKER" ] || return 0
+    $DOCKER ps -q --filter "label=com.docker.compose.project=${COMPOSE_PROJECT}" 2>/dev/null | tr '\n' ' '
+}
+
+show_containers() {
+    # shellcheck disable=SC2086
+    $DOCKER ps --filter "label=com.docker.compose.project=${COMPOSE_PROJECT}" --format '  {{.Names}}  {{.Status}}' 2>/dev/null
+}
+
 pids=$(find_pids | tr '\n' ' ')
 
 if [ -z "${pids// /}" ]; then
@@ -84,8 +107,23 @@ if [ -z "${pids// /}" ]; then
 elif [ "$LIST_ONLY" -eq 1 ]; then
     echo "stand processes (not stopped, dry run):"
     show $pids
+fi
+
+containers=$(find_containers)
+if [ -z "$DOCKER" ]; then
+    echo "containers: docker unavailable here, skipped"
+elif [ -z "${containers// /}" ]; then
+    echo "no stand containers running"
+elif [ "$LIST_ONLY" -eq 1 ]; then
+    echo "stand containers (not stopped, dry run):"
+    show_containers
+fi
+
+if [ "$LIST_ONLY" -eq 1 ]; then
     exit 0
-else
+fi
+
+if [ -n "${pids// /}" ]; then
     round=0
     while [ -n "${pids// /}" ] && [ "$round" -lt "$MAX_ROUNDS" ]; do
         round=$((round + 1))
@@ -102,7 +140,27 @@ else
         # shellcheck disable=SC2086
         [ -n "${left// /}" ] && kill -KILL $left 2>/dev/null
         sleep 0.5
-        pids=$(find_pids | tr '\n' ' ')
+        # `docker` itself, or through sudo when the socket is root-only; empty when docker is unusable here
+DOCKER=''
+if command -v docker >/dev/null 2>&1; then
+    if docker ps -q >/dev/null 2>&1; then
+        DOCKER='docker'
+    elif sudo -n docker ps -q >/dev/null 2>&1; then
+        DOCKER='sudo -n docker'
+    fi
+fi
+
+find_containers() {
+    [ -n "$DOCKER" ] || return 0
+    $DOCKER ps -q --filter "label=com.docker.compose.project=${COMPOSE_PROJECT}" 2>/dev/null | tr '\n' ' '
+}
+
+show_containers() {
+    # shellcheck disable=SC2086
+    $DOCKER ps --filter "label=com.docker.compose.project=${COMPOSE_PROJECT}" --format '  {{.Names}}  {{.Status}}' 2>/dev/null
+}
+
+pids=$(find_pids | tr '\n' ' ')
     done
 fi
 
@@ -126,9 +184,20 @@ else
     echo "dist/run sockets: no listeners"
 fi
 
+if [ -n "$DOCKER" ]; then
+    leftover_containers=$(find_containers)
+    if [ -n "${leftover_containers// /}" ]; then
+        echo "STILL RUNNING containers:"
+        show_containers
+        status=1
+    else
+        echo "containers: none left"
+    fi
+fi
+
 if [ -n "$URL" ]; then
     code=$(curl -sk -o /dev/null -m 10 -w '%{http_code}' "$URL")
-    echo "stand answers HTTP $code (502 is expected for a stopped stand)"
+    echo "stand answers HTTP $code (502, or 000 with the docker nginx gone, is expected for a stopped stand)"
 fi
 
 exit $status
