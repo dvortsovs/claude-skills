@@ -1,0 +1,10 @@
+{
+  "name": "dvortsovs",
+  "version": "0.1.0",
+  "description": "dvortsovs's personal skill namespace for Claude Code. Ships stand-check: verifying a change in a real browser on the developer's own DataLens dev stand (YC / YT) with agent-browser; more skills will live here over time.",
+  "author": {
+    "name": "Sevastian Dvortsov",
+    "email": "dvortsovs@yandex-team.ru"
+  },
+  "keywords": ["dvortsovs", "datalens", "stand", "dev-stand", "agent-browser", "e2e", "tvm", "yandex"]
+}
