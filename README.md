@@ -12,19 +12,23 @@ as `dvortsovs:<skill>`.
 
 ```text
 /plugin marketplace add dvortsovs/claude-skills
-/plugin install dvortsovs@claude-skills
+/plugin install dvortsovs@dvortsovs-skills
 ```
+
+The marketplace registers under the name `dvortsovs-skills` (the repository is
+`claude-skills`), so it does not clash with other personal marketplaces that
+use the repository name.
 
 ## Update
 
 ```text
-/plugin marketplace update claude-skills
-/plugin update dvortsovs@claude-skills
+/plugin marketplace update dvortsovs-skills
+/plugin update dvortsovs@dvortsovs-skills
 /reload-plugins
 ```
 
-From a shell: `claude plugin marketplace update claude-skills`, then
-`claude plugin update dvortsovs@claude-skills`, then restart Claude Code.
+From a shell: `claude plugin marketplace update dvortsovs-skills`, then
+`claude plugin update dvortsovs@dvortsovs-skills`, then restart Claude Code.
 `claude plugin list` shows the installed version.
 
 ---
