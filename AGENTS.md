@@ -35,6 +35,10 @@ A change reaches users only when all three hold:
   line matches the pattern (`exec -a "node …/app-builder/dist/cli.js dev" sleep 300`).
   The skill itself is verified by one real run — a stand check on a branch — not
   by parallel test agents, which would kill each other's stands.
+- `task-cycle` scripts take `--dry-run` / `--help`; `codex-run.sh` is checked
+  with one real read-only run on a tiny prompt. The skill itself is verified by
+  one real cycle on a small task — it spends tokens of two providers, so not
+  as a routine check.
 
 ## Contents
 

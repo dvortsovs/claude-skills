@@ -96,3 +96,50 @@ All under `plugins/dvortsovs/skills/stand-check/scripts/`, each with `--help`:
 | `ensure-tvm.sh [--dry-run] [--force]` | checks `tvmtool`, refreshes its config from Secretnica only when needed |
 | `stop-stand.sh [--dry-run] [--pattern <ere>] [url]` | stops every dev stand process by pid and the docker-mode containers, confirms nothing is left |
 | `wait-stand.sh <url> [timeout]` | polls until the stand answers through nginx |
+
+---
+
+## `dvortsovs:task-cycle`
+
+Runs one development task through a full cycle of agents, with the session
+you invoke it in acting as the orchestrator:
+
+| Phase | Role | Runs as |
+|---|---|---|
+| plan | architect — analyses the current code, writes architecture + execution plan + stand checklist | Claude subagent, Fable |
+| plan review | two critics, in parallel; changes requested → back to the architect (max 3 rounds) | Claude Opus subagent + `codex exec`, frontier model |
+| implement | developer — follows the plan, runs lint / typecheck / unit tests | Claude Opus subagent |
+| code review | two reviewers, in parallel; changes requested → back to the developer (max 3 rounds) | Claude Opus subagent + `codex exec`, frontier model |
+| test | tester — checks the plan's stand checklist on the live dev stand via `dvortsovs:stand-check` | Claude Opus subagent |
+
+All questions are asked once at the start (stand installation, auth file,
+whether to stop for plan approval), so the rest runs unattended until a loop
+hits its round limit. Plans, critiques, reviews and test reports go to
+`.git/task-cycle/<slug>-<timestamp>/` of the target repo — readable by every
+agent, never committed. Nothing is committed or pushed unless you ask.
+
+The workflow is in [SKILL.md](plugins/dvortsovs/skills/task-cycle/SKILL.md),
+the role prompts in
+[references/prompts.md](plugins/dvortsovs/skills/task-cycle/references/prompts.md).
+
+### Usage
+
+It runs only when invoked explicitly — by the command or by naming the skill
+(«запусти task-cycle на …»); Claude never starts it on its own, since one run
+spends a lot of tokens of two providers.
+
+```text
+/dvortsovs:task-cycle CHARTS-1234
+/dvortsovs:task-cycle добавить сортировку в список воркбуков, без стенда
+```
+
+### What it needs
+
+| What | Why |
+|---|---|
+| `codex` CLI, logged in (`codex login`) | the Codex critic and reviewer |
+| everything `stand-check` needs | the tester |
+
+Codex runs read-only (`-s read-only --ephemeral`) through
+`scripts/codex-run.sh`. Overrides: `TASK_CYCLE_CODEX_MODEL` (default
+`gpt-6-astra`), `TASK_CYCLE_CODEX_EFFORT` (default `xhigh`).
