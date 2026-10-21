@@ -11,6 +11,17 @@ The whole run is one sequence: **ask → check auth → stop all stands → star
 
 Scripts live in `scripts/` next to this file: `<skill-dir>` below is the base directory the Skill tool prints when it loads this skill. Run them with the DataLens repo root as the working directory — they find the checkout from there (or from `STAND_REPO_ROOT`).
 
+## Attached mode: a stand someone else runs
+
+Sometimes the stand is already up and owned by the caller — `dvortsovs:task-cycle` starts one stand and runs several testers against it in parallel, each with its own slice of the checklist. The caller says so explicitly ("attached mode", either **parallel** or **exclusive**) and passes the stand URL, cookie domain, auth file, a browser-session prefix and an entity prefix. Then this skill shrinks to **verify the stand answers → open it → run your checks → close your browser session → report**:
+
+- **Skip** step 1 (no questions), step 3 and 3b (the caller checked auth and TVM), step 4 (no stop, no start) and the `stop-stand.sh` call of step 7.
+- **Never** run `stop-stand.sh`, restart the stand, kill dev processes, run `agent-browser close --all`, or touch a session outside your prefix — other testers may be using the same stand at the same time.
+- First make sure the stand answers: `bash <skill-dir>/scripts/wait-stand.sh <stand-url> 60`. If it does not, or it goes down mid-run, do not try to bring it back: stop and report the checks as not run because the stand is down.
+- **Browser sessions.** Every session you open is named `<session-prefix>-<n>` (`-1`, `-2`, …): a session isolates your tabs, cookies and init scripts from the other testers. Step 5's "a session name not used before" and the mock recipe in the agent-browser notes (init scripts only load when the command launches the session) work as usual — just take the next `<n>`. Close every session you opened before reporting, and only those.
+- **Shared state.** All testers log in as the same user against the same backend. Prefix every entity you create with the given entity prefix and touch only those. In **parallel** mode do not change user-level or tenant-level settings (language, theme, favourites, folder or workbook permissions) — the other testers see the change mid-check; an item that needs one is reported as not checked, with the reason. In **exclusive** mode you are the only tester on the stand: such changes are allowed for the items that need them — note each original value first and restore it before reporting, and say in the report that you did.
+- The report (step 8) says "attached mode, stand owned by the caller" instead of confirming the stand is stopped.
+
 ## 1. Resolve the parameters, then ask
 
 A stand runs in one of two ways, and every developer's stand has its own address:

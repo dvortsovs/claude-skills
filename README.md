@@ -64,6 +64,16 @@ Claude triggers it on its own when you ask to «проверить на стен
 Run it from the DataLens checkout (`datalens-ui-private`): the scripts find
 the repo from the working directory.
 
+### Attached mode
+
+When a caller already runs the stand — `dvortsovs:task-cycle` starts one and
+points several parallel testers at it — the skill skips the questions, the
+auth/TVM checks and the stop/start steps, works only in the browser session it
+was given, prefixes the entities it creates, leaves user-level settings alone,
+and never stops the stand: the caller does. Parallel agent-browser sessions are
+isolated (own tabs, cookies, init scripts), so testers do not see each other's
+state in the browser — only on the shared backend.
+
 ### Native and docker stands
 
 | Mode | Where | Start command | Address |
@@ -110,7 +120,7 @@ you invoke it in acting as the orchestrator:
 | plan review | two critics, in parallel; changes requested → back to the architect (max 3 rounds) | Claude Opus subagent + `codex exec`, frontier model |
 | implement | developer — follows the plan, runs lint / typecheck / unit tests | Claude Opus subagent |
 | code review | two reviewers, in parallel; changes requested → back to the developer (max 3 rounds) | Claude Opus subagent + `codex exec`, frontier model |
-| test | tester — checks the plan's stand checklist on the live dev stand via `dvortsovs:stand-check` | Claude Opus subagent |
+| test | 1–4 testers in parallel on **one** stand the orchestrator starts and stops; each takes a group of the plan's stand checklist and runs `dvortsovs:stand-check` in attached mode with its own browser session and entity prefix | Claude Opus subagents |
 
 All questions are asked once at the start (stand installation, auth file,
 whether to stop for plan approval), so the rest runs unattended until a loop

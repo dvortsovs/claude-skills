@@ -1,6 +1,6 @@
 ---
 name: task-cycle
-description: Run a development task through the full cycle with a team of agents — a Fable architect plans, a Claude and a Codex (frontier model) critic review the plan, a developer implements it, a Claude and a Codex reviewer review the code, a tester verifies it on the dev stand with dvortsovs:stand-check. Invoke ONLY when the user explicitly names this skill — `/dvortsovs:task-cycle`, «task-cycle», «скилл task-cycle». Never invoke it on your own for a generic request to implement, plan or review something, however large.
+description: Run a development task through the full cycle with a team of agents — a Fable architect plans, a Claude and a Codex (frontier model) critic review the plan, a developer implements it, a Claude and a Codex reviewer review the code, parallel testers verify it on one dev stand with dvortsovs:stand-check. Invoke ONLY when the user explicitly names this skill — `/dvortsovs:task-cycle`, «task-cycle», «скилл task-cycle». Never invoke it on your own for a generic request to implement, plan or review something, however large.
 ---
 
 # Task cycle
@@ -16,7 +16,7 @@ You are the **orchestrator**. You do not design, write or review code yourself: 
             3 developer ─► 4 reviewers ──changes──► 3
                               │ approve
                               ▼
-                          5 tester ──fails──► 3 ─► 4 ─► 5
+                      5 testers ∥ ──fails──► 3 ─► 4 ─► 5
                               │ passes
                               ▼
                           6 report
@@ -30,7 +30,7 @@ You are the **orchestrator**. You do not design, write or review code yourself: 
 | Developer | `Agent`, `subagent_type: general-purpose`, `model: opus` | Claude Opus |
 | Reviewer A | `Agent`, `subagent_type: general-purpose`, `model: opus` | Claude Opus |
 | Reviewer B | `Bash` → `scripts/codex-run.sh` | Codex frontier (`gpt-6-astra`) |
-| Tester | `Agent`, `subagent_type: general-purpose`, `model: opus`, uses `dvortsovs:stand-check` | Claude Opus |
+| Testers (1–4, parallel) | `Agent`, `subagent_type: general-purpose`, `model: opus`, use `dvortsovs:stand-check` in attached mode against the one stand you start | Claude Opus |
 
 `<skill-dir>` below is the base directory the Skill tool printed when it loaded this skill. The prompt for every role is in [`references/prompts.md`](references/prompts.md) — read it once at the start; fill the placeholders, never paraphrase the verdict format, the loops below parse it.
 
@@ -48,9 +48,11 @@ You are the **orchestrator**. You do not design, write or review code yourself: 
 4. **Codex is usable:** `command -v codex`. If it is missing or a later run fails with an auth error, tell the user (`codex login`) — do not silently drop the Codex roles. Continuing with Claude-only critics and reviewers is the user's call, ask.
 5. **Ask once, up front, in a single `AskUserQuestion`** (in the user's language), so the rest of the cycle can run unattended:
    - **Стенд** — which installation the tester will use: `YC`, `YT`, `Без проверки на стенде`.
-   - **Режим** — `native (dev VM)` / `docker (локальная машина)`, the one `stand-config.sh detect` reports marked `(Recommended)`. To show real commands and addresses in the descriptions, run the stand-check scripts if you can locate them (`~/.claude/plugins/cache/*/dvortsovs/*/skills/stand-check/scripts/stand-config.sh`, newest version: `detect`, then `yc`, `yt`, `yc-docker`, `yt-docker`); otherwise give the bare names.
+   - **Режим** — `native (dev VM)` / `docker (локальная машина)`, the one `stand-config.sh detect` reports marked `(Recommended)`. To show real commands and addresses in the descriptions, run `<skill-dir>/../stand-check/scripts/stand-config.sh` (stand-check ships in the same plugin): `detect`, then `yc`, `yt`, `yc-docker`, `yt-docker`. A mode whose `stand-config.sh` exits 1 (address unknown) or prints a non-empty `WARNING` (the docker host resolves to another machine, or not at all) carries that in its option description, as stand-check step 1 does; if the user picks it, settle the address (the user gives it, or fixes `/etc/hosts`) before going on, and keep it as `STAND_URL` for step 5.
    - **Авторизация** — `projects/yandex/tests/artifacts/auth.txt (Recommended)` or another file.
    - **Утверждение плана** — `Показать план перед разработкой (Recommended)` / `Не останавливаться`.
+
+   The number of parallel testers is not asked: the default is up to 3 (step 5); the user can set it in the request ("тестеров: 2", "один тестировщик").
 
    That is four questions — the `AskUserQuestion` maximum, and each has at most four options (its schema allows 2–4), so do not merge installation and mode into one question. Skip a question the request already answers; drop **Режим** and **Авторизация** when the stand is skipped.
 
@@ -105,17 +107,45 @@ Same mechanics as step 2, with the **Reviewer** prompt, both in parallel: Claude
 - Any `blocker`/`major` → `SendMessage` the developer with both review paths: fix or rebut each finding by id, re-run verification for what changed, append a **Fixes round N** section to `dev-report.md`. Then round `N+1` — the reviewers get the previous reviews and the dev report, and check that the findings are really closed, not only the new diff.
 - **Round limit: 3**, then escalate to the user exactly as in step 2.
 
-## 5. Tester
+## 5. Testers — one stand, parallel checks
 
 Skip if the user chose `Без проверки на стенде`.
 
-Spawn the tester with the **Tester** prompt: it loads `dvortsovs:stand-check`, uses the installation and auth file the user already chose, checks the **Stand checklist** from the plan plus anything the dev report added, and writes `<run>/test/report-rN.md`. It only verifies — it never edits code — and always stops the stand.
+You own the stand; the testers only attach to it. One stand runs at a time on the machine, and nothing that starts a stand or runs a typecheck may run while it is up. `<sc>` below is `<skill-dir>/../stand-check` — the stand-check skill of the same plugin; read its `SKILL.md` once (steps 3, 3b, 4, 7 and "Attached mode"), its scripts do the work.
 
-Only one stand runs at a time on the machine: never run the tester in parallel with anything that starts a stand or runs a typecheck.
+**5a. Split the checklist.** Take the plan's **Stand checklist** plus the extra checks in `dev-report.md` (in a re-test: every item the previous round did not pass — failed, blocked, not checked, or in a group whose report was missing — plus the items the latest Fixes section lists and a short smoke of the main path; an item drops out only once it has passed after the latest fix). Split them into `K` groups and write them to `<run>/test/groups-rN.md`, one `## Group gk` section each (`g1`, `g2`, …):
 
-- `VERDICT: PASS` → step 6.
-- `VERDICT: FAIL` because of the implementation → `SendMessage` the developer with the test report, then the review loop of step 4 on the fix, run to `APPROVE` by both reviewers exactly as there (round numbering continues, the same limit of 3 rounds counts per fix), then the tester again. Never re-test code the reviewers have not approved. **Limit: 2** tester rounds, then escalate.
-- `VERDICT: BLOCKED` (dead auth, stand would not start, TVM) → the code is not at fault; relay the tester's instruction to the user and wait. Do not send it to the developer.
+- `K` = the user's number, else `min(3, ceil(items / 4))`, at most 4 — each tester runs its own Chromium next to the stand, and memory is the limit.
+- Group by UI area/flow, so one tester does not reopen what another already set up.
+- Items that share an entity or form a sequence (create → edit → reopen) stay in one group.
+- Items that change user- or tenant-level state (language, theme, favourites, permissions) go together into one **exclusive** group, which runs **after** the parallel ones, alone — all testers share one logged-in user. Mark it `## Group gk (exclusive)`.
+
+**5b. Bring the stand up** — stand-check steps 3, 3b and 4, done by you:
+
+```bash
+bash <sc>/scripts/stand-config.sh <mode>                    # URL, COMMAND, COOKIE_DOMAIN, NEEDS_TVM, WARNING
+# step 3: the auth curl check from stand-check (never print the file)
+bash <sc>/scripts/ensure-tvm.sh                             # only when NEEDS_TVM=1
+bash <sc>/scripts/stop-stand.sh <url>
+<COMMAND> > <run>/test/stand-rN.log 2>&1                    # run_in_background
+bash <sc>/scripts/wait-stand.sh <url> <timeout>             # run_in_background; 1800 for docker
+```
+
+Before starting: if `stand-config.sh` exits 1 or prints a `WARNING` the user has not settled in step 0, stop and settle the address with the user — a docker host that resolves to another machine answers `wait-stand.sh` with someone else's code. Use `STAND_URL=<settled address>` in front of the scripts when step 0 settled one.
+
+Dead auth, a TVM prerequisite, a start that fails → this round is `BLOCKED`: stop the stand, tell the user what to do (stand-check says what), wait.
+
+**Warm-up, bounded.** Once `wait-stand.sh` succeeds, open the stand in a throwaway agent-browser session `tc-rN-warmup` exactly as stand-check step 5 does — `open --ignore-https-errors` on a session name not used before, `cookies set --curl <auth-file> --domain <cookie-domain>`, then open the stand again — and reload until the app renders, for at most 5 minutes. A landing or login page instead of the app is an auth problem, not a build problem: `BLOCKED`, stop the stand, ask the user to re-export the auth file. A compile-error overlay (or errors in `stand-rN.log`) means the code does not build: stop the stand, and the round is `FAIL` with the error text — it goes to the developer. Still blank after 5 minutes with no error → `BLOCKED`, stop the stand. Close the warm-up session either way.
+
+**5c. Spawn the testers in parallel, in one message**, with the **Tester** prompt — one per parallel group, each with: its group id (`gk`) and `groups-rN.md`, mode `parallel`, the stand URL and cookie domain, the auth file, a session prefix `tc-rN-gk`, an entity prefix `tc-rN-gk-`, and output `<run>/test/report-rN-gk.md`. When they are all back, the exclusive group, if any, alone, with mode `exclusive`.
+
+**5d. Stop the stand — always**, once every tester is back (or the round is abandoned for any reason): `bash <sc>/scripts/stop-stand.sh <url>` — it must report nothing left. A tester that never returns does not keep the stand alive: stop it, and that group counts as `BLOCKED` (step 5e).
+
+**5e. Merge the verdicts.** First normalise each group: a missing report file, one whose first line is not a valid `VERDICT:`, or a `PASS` that leaves any of its assigned items "not checked" counts as `BLOCKED` for that group (list the unchecked items). Then: `FAIL` if any group failed because of the implementation; otherwise `BLOCKED` if any group is blocked; `PASS` only when every group passed with every assigned item checked. Write `<run>/test/report-rN.md`: the merged verdict line, the stand and auth used, one line per group (verdict + report path), and the failed items with their evidence copied from the group reports.
+
+- `PASS` → step 6.
+- `FAIL` → `SendMessage` the developer with `report-rN.md` (the stand is down by now — the developer's typecheck must not run next to it), then the review loop of step 4 on the fix, run to `APPROVE` by both reviewers exactly as there (round numbering continues, the same limit of 3 rounds counts per fix), then step 5 again with a re-test split. Never re-test code the reviewers have not approved. **Limit: 2** tester rounds, then escalate.
+- `BLOCKED` (dead auth, stand would not start, TVM, missing data) → the code is not at fault; relay the instruction to the user and wait. Do not send it to the developer.
 
 ## 6. Report
 
@@ -123,7 +153,7 @@ To the user, in their language, short, outcome first:
 
 - what was done (3–5 lines) and the branch;
 - rounds: plan N, code N, stand N, and any finding left open (minor, or rejected with a reason) — with ids, so they can be looked up;
-- stand result with the main evidence, or why it was skipped/blocked;
+- stand result with the main evidence (testers × groups), or why it was skipped/blocked;
 - verification the developer ran and its result;
 - the run directory, for the full plans, critiques, reviews and test reports;
 - next step: nothing is committed or pushed unless the user asked. Offer to commit and open a PR, with a title in the repo's format (`CHARTS-1234: Description`).
