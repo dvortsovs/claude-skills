@@ -47,14 +47,13 @@ You are the **orchestrator**. You do not design, write or review code yourself: 
    It lives under `.git/task-cycle/`, so every agent, Codex included, can read it and nothing in it gets committed.
 4. **Codex is usable:** `command -v codex`. If it is missing or a later run fails with an auth error, tell the user (`codex login`) — do not silently drop the Codex roles. Continuing with Claude-only critics and reviewers is the user's call, ask.
 5. **Ask once, up front, in a single `AskUserQuestion`** (in the user's language), so the rest of the cycle can run unattended:
-   - **Стенд** — which installation the tester will use: `YC`, `YT`, `Без проверки на стенде`.
-   - **Режим** — `native (dev VM)` / `docker (локальная машина)`, the one `stand-config.sh detect` reports marked `(Recommended)`. To show real commands and addresses in the descriptions, run `<skill-dir>/../stand-check/scripts/stand-config.sh` (stand-check ships in the same plugin): `detect`, then `yc`, `yt`, `yc-docker`, `yt-docker`. A mode whose `stand-config.sh` exits 1 (address unknown) or prints a non-empty `WARNING` (the docker host resolves to another machine, or not at all) carries that in its option description, as stand-check step 1 does; if the user picks it, settle the address (the user gives it, or fixes `/etc/hosts`) before going on, and keep it as `STAND_URL` for step 5.
-   - **Авторизация** — `projects/yandex/tests/artifacts/auth.txt (Recommended)` or another file.
+   - **Стенд** — which installation the tester will use: `YT`, `YC production`, `YC preprod`, `Без проверки на стенде`. The stand is the docker stand of the current checkout (the main one or a git worktree — each runs its own, see stand-check «One stand per checkout»). To show real commands and addresses in the descriptions, run `<skill-dir>/../stand-check/scripts/stand-config.sh` (stand-check ships in the same plugin) with `yt`, `yc`, `yc-preprod` from the checkout root. An installation whose `stand-config.sh` exits 1 (address unknown) or prints a non-empty `WARNING` (the host does not resolve to this machine, docker is down) carries that in its option description, as stand-check step 1 does; if the user picks it, settle it (the user gives the address, runs `pnpm docker:dev:dns` or fixes `/etc/hosts`, starts docker) before going on, and keep a given address as `STAND_URL` for step 5. Exit 2 (the checkout has no per-worktree launcher) — tell the user to rebase on `main`.
+   - **Авторизация** — `projects/yandex/tests/artifacts/auth.txt (Recommended)` or another file. In a worktree the file usually lives only in the main checkout: offer that path.
    - **Утверждение плана** — `Показать план перед разработкой (Recommended)` / `Не останавливаться`.
 
    The number of parallel testers is not asked: the default is up to 3 (step 5); the user can set it in the request ("тестеров: 2", "один тестировщик").
 
-   That is four questions — the `AskUserQuestion` maximum, and each has at most four options (its schema allows 2–4), so do not merge installation and mode into one question. Skip a question the request already answers; drop **Режим** and **Авторизация** when the stand is skipped.
+   Each question has at most four options (the `AskUserQuestion` schema allows 2–4). Skip a question the request already answers; drop **Авторизация** when the stand is skipped. When `stand-config.sh` reports `STATE=running`, this checkout's stand is already up and is the user's: tell them in the **Стенд** question that step 5 restarts it.
 
 Tell the user in one line that the cycle has started and where the artifacts are.
 
@@ -111,7 +110,7 @@ Same mechanics as step 2, with the **Reviewer** prompt, both in parallel: Claude
 
 Skip if the user chose `Без проверки на стенде`.
 
-You own the stand; the testers only attach to it. One stand runs at a time on the machine, and nothing that starts a stand or runs a typecheck may run while it is up. `<sc>` below is `<skill-dir>/../stand-check` — the stand-check skill of the same plugin; read its `SKILL.md` once (steps 3, 3b, 4, 7 and "Attached mode"), its scripts do the work.
+You own the stand; the testers only attach to it. The stand is the docker stand of the current checkout (stand-check «One stand per checkout»): stop and start only that one — stands of other worktrees and the shared nginx belong to other work. Nothing that starts a stand or runs a typecheck may run in this checkout while the stand is up. `<sc>` below is `<skill-dir>/../stand-check` — the stand-check skill of the same plugin; read its `SKILL.md` once ("One stand per checkout", steps 3, 4, 7 and "Attached mode"), its scripts do the work.
 
 **5a. Split the checklist.** Take the plan's **Stand checklist** plus the extra checks in `dev-report.md` (in a re-test: every item the previous round did not pass — failed, blocked, not checked, or in a group whose report was missing — plus the items the latest Fixes section lists and a short smoke of the main path; an item drops out only once it has passed after the latest fix). Split them into `K` groups and write them to `<run>/test/groups-rN.md`, one `## Group gk` section each (`g1`, `g2`, …):
 
@@ -120,32 +119,32 @@ You own the stand; the testers only attach to it. One stand runs at a time on th
 - Items that share an entity or form a sequence (create → edit → reopen) stay in one group.
 - Items that change user- or tenant-level state (language, theme, favourites, permissions) go together into one **exclusive** group, which runs **after** the parallel ones, alone — all testers share one logged-in user. Mark it `## Group gk (exclusive)`.
 
-**5b. Bring the stand up** — stand-check steps 3, 3b and 4, done by you:
+**5b. Bring the stand up** — stand-check steps 3 and 4, done by you, from the checkout root:
 
 ```bash
-bash <sc>/scripts/stand-config.sh <mode>                    # URL, COMMAND, COOKIE_DOMAIN, NEEDS_TVM, WARNING
+bash <sc>/scripts/stand-config.sh <yt|yc|yc-preprod>        # URL, CONTAINER, COMMAND, COOKIE_DOMAIN, WARNING
 # step 3: the auth curl check from stand-check (never print the file)
-bash <sc>/scripts/ensure-tvm.sh                             # only when NEEDS_TVM=1
-bash <sc>/scripts/stop-stand.sh <url>
-<COMMAND> > <run>/test/stand-rN.log 2>&1                    # run_in_background
-bash <sc>/scripts/wait-stand.sh <url> <timeout>             # run_in_background; 1800 for docker
+bash <sc>/scripts/stop-stand.sh <url>                       # this checkout's stand only
+<COMMAND> > <run>/test/stand-start-rN.log 2>&1              # --detach: returns once the containers are up
+docker logs -f <CONTAINER> > <run>/test/stand-rN.log 2>&1   # run_in_background
+bash <sc>/scripts/wait-stand.sh <url> 1800 <CONTAINER>      # run_in_background
 ```
 
-Before starting: if `stand-config.sh` exits 1 or prints a `WARNING` the user has not settled in step 0, stop and settle the address with the user — a docker host that resolves to another machine answers `wait-stand.sh` with someone else's code. Use `STAND_URL=<settled address>` in front of the scripts when step 0 settled one.
+Before starting: if `stand-config.sh` exits 1 or prints a `WARNING` the user has not settled in step 0, stop and settle it with the user — a host that resolves to another machine answers `wait-stand.sh` with someone else's code. Use `STAND_URL=<settled address>` in front of the scripts when step 0 settled one. The launcher's warnings in `stand-start-rN.log` (a certificate that does not cover the address, a name taken by another directory) are stand-check step 4's to handle.
 
-Dead auth, a TVM prerequisite, a start that fails → this round is `BLOCKED`: stop the stand, tell the user what to do (stand-check says what), wait.
+Dead auth, a launcher that refuses to start, a container that stops (`wait-stand.sh` prints its log tail), a stale `SERVICE_ACCOUNT_IAM_TOKEN` for YC production → this round is `BLOCKED`: stop the stand, tell the user what to do (stand-check says what), wait.
 
 **Warm-up, bounded.** Once `wait-stand.sh` succeeds, open the stand in a throwaway agent-browser session `tc-rN-warmup` exactly as stand-check step 5 does — `open --ignore-https-errors` on a session name not used before, `cookies set --curl <auth-file> --domain <cookie-domain>`, then open the stand again — and reload until the app renders, for at most 5 minutes. A landing or login page instead of the app is an auth problem, not a build problem: `BLOCKED`, stop the stand, ask the user to re-export the auth file. A compile-error overlay (or errors in `stand-rN.log`) means the code does not build: stop the stand, and the round is `FAIL` with the error text — it goes to the developer. Still blank after 5 minutes with no error → `BLOCKED`, stop the stand. Close the warm-up session either way.
 
 **5c. Spawn the testers in parallel, in one message**, with the **Tester** prompt — one per parallel group, each with: its group id (`gk`) and `groups-rN.md`, mode `parallel`, the stand URL and cookie domain, the auth file, a session prefix `tc-rN-gk`, an entity prefix `tc-rN-gk-`, and output `<run>/test/report-rN-gk.md`. When they are all back, the exclusive group, if any, alone, with mode `exclusive`.
 
-**5d. Stop the stand — always**, once every tester is back (or the round is abandoned for any reason): `bash <sc>/scripts/stop-stand.sh <url>` — it must report nothing left. A tester that never returns does not keep the stand alive: stop it, and that group counts as `BLOCKED` (step 5e).
+**5d. Stop the stand — always**, once every tester is back (or the round is abandoned for any reason): `bash <sc>/scripts/stop-stand.sh <url>` — it must exit 0, nothing of this checkout left (1: something is left or docker did not answer; 2: nothing was stopped) — and stop the background `docker logs -f` task. A tester that never returns does not keep the stand alive: stop it, and that group counts as `BLOCKED` (step 5e).
 
 **5e. Merge the verdicts.** First normalise each group: a missing report file, one whose first line is not a valid `VERDICT:`, or a `PASS` that leaves any of its assigned items "not checked" counts as `BLOCKED` for that group (list the unchecked items). Then: `FAIL` if any group failed because of the implementation; otherwise `BLOCKED` if any group is blocked; `PASS` only when every group passed with every assigned item checked. Write `<run>/test/report-rN.md`: the merged verdict line, the stand and auth used, one line per group (verdict + report path), and the failed items with their evidence copied from the group reports.
 
 - `PASS` → step 6.
 - `FAIL` → `SendMessage` the developer with `report-rN.md` (the stand is down by now — the developer's typecheck must not run next to it), then the review loop of step 4 on the fix, run to `APPROVE` by both reviewers exactly as there (round numbering continues, the same limit of 3 rounds counts per fix), then step 5 again with a re-test split. Never re-test code the reviewers have not approved. **Limit: 2** tester rounds, then escalate.
-- `BLOCKED` (dead auth, stand would not start, TVM, missing data) → the code is not at fault; relay the instruction to the user and wait. Do not send it to the developer.
+- `BLOCKED` (dead auth, stand would not start, an expired token, missing data) → the code is not at fault; relay the instruction to the user and wait. Do not send it to the developer.
 
 ## 6. Report
 

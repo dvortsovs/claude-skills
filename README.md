@@ -36,14 +36,13 @@ From a shell: `claude plugin marketplace update dvortsovs-skills`, then
 ## `dvortsovs:stand-check`
 
 Verifies the change you are working on in a real browser against your own
-DataLens dev stand, end to end: asks which installation (YC / YT, native on a
-dev VM or docker on a local machine / other) and which auth file to use, checks that the auth session is alive before spending
-minutes on a build, makes sure TVM is healthy for YT (refreshing it only when
-the config in `/etc/tvmtool` has drifted from Secretnica or the daemon is
-down), stops every running dev stand — native processes and docker-mode
-containers, including ones started elsewhere — starts a fresh one, drives the UI with
-[agent-browser](https://www.npmjs.com/package/agent-browser) against the real
-backend, stops the stand, and reports each check with the evidence that
+DataLens docker dev stand, end to end: asks which installation (YT / YC
+production / YC preprod / other) and which auth file to use, checks that the
+auth session is alive before spending minutes on a build, restarts the stand of
+the current checkout — the main one or a git worktree, each runs its own —
+leaving the other worktrees' stands and the shared nginx alone, drives the UI
+with [agent-browser](https://www.npmjs.com/package/agent-browser) against the
+real backend, stops that stand, and reports each check with the evidence that
 decided it.
 
 The workflow is in [SKILL.md](plugins/dvortsovs/skills/stand-check/SKILL.md);
@@ -61,40 +60,47 @@ Claude triggers it on its own when you ask to «проверить на стен
 /dvortsovs:stand-check на YT
 ```
 
-Run it from the DataLens checkout (`datalens-ui-private`): the scripts find
-the repo from the working directory.
+Run it from the DataLens checkout under test (`datalens-ui-private` or one of
+its worktrees): the scripts find the checkout from the working directory.
 
 ### Attached mode
 
 When a caller already runs the stand — `dvortsovs:task-cycle` starts one and
 points several parallel testers at it — the skill skips the questions, the
-auth/TVM checks and the stop/start steps, works only in the browser session it
+auth check and the stop/start steps, works only in the browser session it
 was given, prefixes the entities it creates, leaves user-level settings alone,
 and never stops the stand: the caller does. Parallel agent-browser sessions are
 isolated (own tabs, cookies, init scripts), so testers do not see each other's
-state in the browser — only on the shared backend.
+state in the browser — only on the shared backend. A stand you point it at by
+URL is treated the same way: checked, not restarted.
 
-### Native and docker stands
+### One stand per checkout
 
-| Mode | Where | Start command | Address |
-|---|---|---|---|
-| native | dev VM with host nginx (+ tvmtool for YT) | `pnpm run yc:dev`, `pnpm run yt:dev` | `server_name` from `projects/yandex/dev-nginx/nginx.conf` |
-| docker | local machine, containers of compose project `datalens-ui-yandex` | `pnpm run yc:dev:docker:no-typecheck`, `pnpm run yt:dev:docker:no-typecheck` | `https://<PROJECT_NAME>.<user>.<suffix>` from the compose nginx template; the host must point at the machine (`/etc/hosts`) |
+The repo's launcher `projects/yandex/scripts/dev/docker-stand.js` gives every
+checkout its own stand behind one shared nginx:
 
-The default is detected: native when the host nginx config exists, docker
-otherwise. In docker mode `tvmtool` is a container, so the TVM refresh is
-skipped, and the stand is stopped with `docker stop` as well as by pid.
+| Checkout | Container | Address (YT; YC follows `ENV`) |
+|---|---|---|
+| main | `datalens-ui-yandex-dev` | `https://<PROJECT_NAME>.<user>.ui.yandex-team.ru` |
+| worktree `<dir>` | `datalens-ui-yandex-<dir>-dev` | `https://<dir>.<user>.ui.yandex-team.ru` |
+
+The skill reads the names and addresses from the launcher's `info`, starts
+the stand with `--detach`, and stops it with the launcher's `stop`. Several
+sessions can check in parallel from different worktrees; within one checkout
+YT and YC replace each other.
 
 ### What it needs on the machine
 
 | What | Why |
 |---|---|
-| A dev VM set up per `docs/dev/setup.md` of the DataLens repo, or docker with the certificates in `projects/yandex/dev/docker/crt/` | native or docker stand |
+| Docker (Colima) set up per `docs/dev/docker-dev.md` of the DataLens repo, the certificates in `projects/yandex/dev/docker/crt/` (a wildcard one for worktree addresses) | the stand |
+| The stand address resolving to `127.0.0.1`: `pnpm docker:dev:dns` once for all worktree stands, or `/etc/hosts` | the browser reaches the local nginx |
+| A checkout that has `docker-stand.js` (worktrees on old branches don't) | per-checkout stands |
 | `npm i -g agent-browser` | the browser |
 | `projects/yandex/tests/artifacts/auth.txt` | a curl command copied from the browser devtools with a live session (gitignored); a Playwright `storageState` JSON works too |
-| YT only: `tvmtool`, passwordless `sudo`, `yav` logged in | for the automatic TVM refresh |
 
-Overrides: `STAND_URL`, `STAND_AUTH_FILE`, `STAND_REPO_ROOT`, `PROJECT_NAME` in the environment.
+Overrides: `STAND_URL`, `STAND_AUTH_FILE`, `STAND_REPO_ROOT`, `STAND_ENV` in the
+environment; `DEV_INSTANCE` and `PROJECT_NAME` go to the launcher.
 
 ### Scripts
 
@@ -102,10 +108,9 @@ All under `plugins/dvortsovs/skills/stand-check/scripts/`, each with `--help`:
 
 | Script | Does |
 |---|---|
-| `stand-config.sh <yc\|yt\|yc-docker\|yt-docker\|detect>` | prints the mode, start command, stand URL (and what it resolves to), cookie domain, auth file and whether the host TVM is needed; `detect` picks the default mode |
-| `ensure-tvm.sh [--dry-run] [--force]` | checks `tvmtool`, refreshes its config from Secretnica only when needed |
-| `stop-stand.sh [--dry-run] [--pattern <ere>] [url]` | stops every dev stand process by pid and the docker-mode containers, confirms nothing is left |
-| `wait-stand.sh <url> [timeout]` | polls until the stand answers through nginx |
+| `stand-config.sh <yt\|yc\|yc-preprod>` | prints this checkout's instance, container and its state, the start command, stand URL (and what it resolves to), cookie domain and auth file |
+| `stop-stand.sh [--dry-run] [--pattern <ere>] [url]` | stops this checkout's stand: host processes started from it, by pid, and its containers; confirms no process, container or host-port listener of it is left (exit 0), or says what is left or unknown (1, 2) |
+| `wait-stand.sh <url> [timeout] [container]` | polls until the stand answers through nginx, gives up early when the container stops |
 
 ---
 

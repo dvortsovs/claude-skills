@@ -31,10 +31,14 @@ A change reaches users only when all three hold:
   repo from the working directory (`git rev-parse --show-toplevel`) or an
   explicit env var, never from their own location.
 - `stand-check` scripts are exercised against the real machine state with
-  `--dry-run`; `stop-stand.sh` can be tested with a fake process whose command
-  line matches the pattern (`exec -a "node …/app-builder/dist/cli.js dev" sleep 300`).
-  The skill itself is verified by one real run — a stand check on a branch — not
-  by parallel test agents, which would kill each other's stands.
+  `--dry-run`, from the main checkout and from a throwaway git worktree
+  (`git worktree add --detach /tmp/<name> main`, removed afterwards).
+  `stop-stand.sh` can be tested with fake processes whose command line matches
+  the pattern (`exec -a "node …/app-builder/dist/cli.js dev" sleep 300`), one
+  started with its working directory inside the checkout and one outside — only
+  the first must be stopped. The skill itself is verified by one real run — a
+  stand check on a branch; parallel runs only from different worktrees, which
+  get separate stands.
 - `task-cycle` scripts take `--dry-run` / `--help`; `codex-run.sh` is checked
   with one real read-only run on a tiny prompt. The skill itself is verified by
   one real cycle on a small task — it spends tokens of two providers, so not
@@ -42,5 +46,5 @@ A change reaches users only when all three hold:
 
 ## Contents
 
-The skills hold internal-installation specifics (dev stand host patterns, the
-TVM secret id, wiki links), so the repository stays private.
+The skills hold internal-installation specifics (dev stand host patterns,
+internal domains), so the repository stays private.

@@ -1,61 +1,72 @@
 ---
 name: stand-check
-description: Verify the current implementation on the developer's own live dev stand in a real browser — asks which installation (YC / YT, native on a dev VM or docker on a local machine / other) and which auth file to use, resolves the stand address from the developer's nginx config or the compose template, stops every running dev stand process, starts a fresh stand, drives the UI with agent-browser, then shuts the stand down and reports. Use whenever the user says «проверить на стенде», «проверь на стенде», «проверка на стенде», «посмотри на стенде», "check on the stand", "verify on the dev stand", or otherwise asks to see a change working on their stand — even when they name neither agent-browser nor the start command.
+description: Verify the current implementation on the developer's own live docker dev stand in a real browser — asks which installation (YT / YC production / YC preprod / other) and which auth file to use, resolves the stand of the current checkout (the main one or a git worktree, each runs its own stand) with the repo's launcher, restarts only that stand, drives the UI with agent-browser, then stops that stand and reports. Use whenever the user says «проверить на стенде», «проверь на стенде», «проверка на стенде», «посмотри на стенде», "check on the stand", "verify on the dev stand", or otherwise asks to see a change working on their stand — even when they name neither agent-browser nor the start command.
 ---
 
 # Stand check
 
 Verify that the implementation actually works in a browser against a running dev stand. Developers ask for this constantly, with the same parameters each time; this skill holds the parameters and the traps so they don't have to be retyped or rediscovered.
 
-The whole run is one sequence: **ask → check auth → stop all stands → start a fresh stand → drive the UI → stop the stand → report**. The two "stop" steps are not optional, see why in step 4.
+The whole run is one sequence: **ask → check auth → stop this checkout's stand → start it fresh → drive the UI → stop it → report**.
 
-Scripts live in `scripts/` next to this file: `<skill-dir>` below is the base directory the Skill tool prints when it loads this skill. Run them with the DataLens repo root as the working directory — they find the checkout from there (or from `STAND_REPO_ROOT`).
+Scripts live in `scripts/` next to this file: `<skill-dir>` below is the base directory the Skill tool prints when it loads this skill. Run them with the root of the checkout under test as the working directory — the main checkout or a git worktree; they find it from there (or from `STAND_REPO_ROOT`).
+
+## One stand per checkout
+
+The stand runs in docker on the local machine. Every checkout has its own stand — the main checkout the default one, each git worktree one named after its directory — with its own compose project, containers, host ports and address; one shared nginx container (`datalens-ui-yandex-nginx`) on port 443 routes each address to its stand. The repo's launcher `projects/yandex/scripts/dev/docker-stand.js` (behind `pnpm *:dev:docker*` and `pnpm docker:dev:*`) does the naming; `docs/dev/docker-runtime.md` → «Несколько стендов: git worktree» in the DataLens repo is the reference.
+
+So the stand under test is **the stand of the checkout you work in**, and only that one is yours to stop and start:
+
+- Stands of other worktrees may be someone's work in progress — another session, another agent, the user. Never stop, restart or remove them, and never stop the shared nginx. `pnpm docker:dev:list` shows them all, with their checkout directories.
+- YT and YC of one checkout share the compose project and `dist`, so they never run at once: starting one replaces the other.
+- A checkout without `docker-stand.js` (a worktree on an old branch) has no stand of its own: the scripts exit 2 — tell the user to rebase it on `main`.
 
 ## Attached mode: a stand someone else runs
 
 Sometimes the stand is already up and owned by the caller — `dvortsovs:task-cycle` starts one stand and runs several testers against it in parallel, each with its own slice of the checklist. The caller says so explicitly ("attached mode", either **parallel** or **exclusive**) and passes the stand URL, cookie domain, auth file, a browser-session prefix and an entity prefix. Then this skill shrinks to **verify the stand answers → open it → run your checks → close your browser session → report**:
 
-- **Skip** step 1 (no questions), step 3 and 3b (the caller checked auth and TVM), step 4 (no stop, no start) and the `stop-stand.sh` call of step 7.
-- **Never** run `stop-stand.sh`, restart the stand, kill dev processes, run `agent-browser close --all`, or touch a session outside your prefix — other testers may be using the same stand at the same time.
+- **Skip** step 1 (no questions), step 3 (the caller checked auth), step 4 (no stop, no start) and the `stop-stand.sh` call of step 7.
+- **Never** run `stop-stand.sh`, restart the stand, stop containers or kill dev processes, run `agent-browser close --all`, or touch a session outside your prefix — other testers may be using the same stand at the same time.
 - First make sure the stand answers: `bash <skill-dir>/scripts/wait-stand.sh <stand-url> 60`. If it does not, or it goes down mid-run, do not try to bring it back: stop and report the checks as not run because the stand is down.
 - **Browser sessions.** Every session you open is named `<session-prefix>-<n>` (`-1`, `-2`, …): a session isolates your tabs, cookies and init scripts from the other testers. Step 5's "a session name not used before" and the mock recipe in the agent-browser notes (init scripts only load when the command launches the session) work as usual — just take the next `<n>`. Close every session you opened before reporting, and only those.
 - **Shared state.** All testers log in as the same user against the same backend. Prefix every entity you create with the given entity prefix and touch only those. In **parallel** mode do not change user-level or tenant-level settings (language, theme, favourites, folder or workbook permissions) — the other testers see the change mid-check; an item that needs one is reported as not checked, with the reason. In **exclusive** mode you are the only tester on the stand: such changes are allowed for the items that need them — note each original value first and restore it before reporting, and say in the report that you did.
 - The report (step 8) says "attached mode, stand owned by the caller" instead of confirming the stand is stopped.
 
+The same applies when the user points you at a stand that is already up ("проверь на `https://…`", a shared dev-proxy stand): it is theirs — check the auth file (step 3), then steps 5–6, close your browser session, and leave the stand running.
+
 ## 1. Resolve the parameters, then ask
-
-A stand runs in one of two ways, and every developer's stand has its own address:
-
-- **native** (a dev VM): nginx and `tvmtool` on the host, the address is `server_name` in the generated `projects/yandex/dev-nginx/nginx.conf` of the DataLens repo (`docs/dev/setup.md` there);
-- **docker** (a local machine, laptop): app, nginx and `tvmtool` run as containers of the compose project `datalens-ui-yandex`, the nginx container listens on 443 of the machine, the address comes from the compose nginx template (`projects/yandex/dev/docker/nginx.conf`: `<PROJECT_NAME>.<user>.<suffix>`, `docs/dev/running.md` → «Docker-режимы»).
 
 Resolve everything first, so the question shows the user their real commands and addresses:
 
 ```bash
-bash <skill-dir>/scripts/stand-config.sh detect        # DEFAULT=yc (host nginx config exists) or yc-docker
-bash <skill-dir>/scripts/stand-config.sh yc            # likewise yt, yc-docker, yt-docker
+bash <skill-dir>/scripts/stand-config.sh yt            # likewise yc, yc-preprod
 ```
 
-Each prints `MODE`, `COMMAND`, `URL`, `HOST_SOURCE`, `RESOLVES_TO`, `COOKIE_DOMAIN`, `AUTH_FILE`, `NEEDS_TVM` and `WARNING`:
+Each prints `INSTANCE`, `CONTAINER`, `STATE`, `RUNNING_ENV`, `COMMAND`, `URL`, `RESOLVES_TO`, `COOKIE_DOMAIN`, `AUTH_FILE` and `WARNING`:
 
-| Installation | Start command | Address | Cookie domain |
+| Installation | Start command (`--detach`: in the background) | Address: main checkout / worktree `<dir>` | Cookie domain |
 |---|---|---|---|
-| **YC** | `pnpm run yc:dev` | `https://<user>.dev.preprod.datalens.ru` | `.preprod.datalens.ru` |
-| **YT** | `pnpm run yt:dev` | `https://<CONFIG_NAME>.<user>.ui.yandex-team.ru` | `.yandex-team.ru` — needs a healthy host `tvmtool`, step 3b |
-| **YC docker** | `pnpm run yc:dev:docker:no-typecheck` | `https://<PROJECT_NAME>.<user>.dev.preprod.datalens.ru` | `.preprod.datalens.ru` |
-| **YT docker** | `pnpm run yt:dev:docker:no-typecheck` | `https://<PROJECT_NAME>.<user>.ui.yandex-team.ru` | `.yandex-team.ru` — `tvmtool` is a container, step 3b does not apply |
+| **YT** | `ENV=development pnpm run yt:dev:docker:no-typecheck --detach` | `https://<PROJECT_NAME>.<user>.ui.yandex-team.ru` / `https://<dir>.<user>.ui.yandex-team.ru` | `.yandex-team.ru` |
+| **YC production** | `ENV=production pnpm run yc:dev:docker:no-typecheck --detach` | `https://local.datalens.ru` / `https://<dir>.<user>.dev.datalens.ru` | `.datalens.ru` |
+| **YC preprod** | `ENV=development pnpm run yc:dev:docker:no-typecheck --detach` | `https://<PROJECT_NAME>.<user>.dev.preprod.datalens.ru` / `https://<dir>.<user>.dev.preprod.datalens.ru` | `.preprod.datalens.ru` |
 | Other | ask the user | ask the user | parent domain shared by the stand host and the auth file's host |
 
-The recommended option is what `detect` says: native where the host nginx config exists, docker otherwise. `STAND_URL`, `STAND_AUTH_FILE` and `PROJECT_NAME` in the environment override the resolved values. When the script exits 1 (no nginx config, no override), the address is unknown — ask for it, do not guess. A non-empty `WARNING` (the docker host resolves to another machine, or not at all — on a laptop it has to point at `127.0.0.1`, usually through `/etc/hosts`) means the address must be confirmed with the user, in the same question: put the warning into the option's description.
+The addresses come from the launcher (`docker-stand.js info`), not from a template copied here. `STAND_URL`, `STAND_AUTH_FILE` and `STAND_ENV` (the app's `ENV`; a plain `ENV` exported by the shell is ignored on purpose) in the environment override the resolved values; `DEV_INSTANCE` and `PROJECT_NAME` are read by the launcher itself. When the script exits 1 the address is unknown — ask for it, do not guess. A non-empty `WARNING` means the address must be confirmed with the user, in the same question — put the warning into the option's description:
 
-The default auth file is `projects/yandex/tests/artifacts/auth.txt` (gitignored, per developer): a raw `curl` command copied from the browser's devtools, re-exported when it goes stale. A Playwright `storageState` JSON or a `Cookie:` header file works too.
+- the host does not resolve to `127.0.0.1` — usual for the first worktree stand. Wildcard DNS for all worktree stands is `pnpm docker:dev:dns` once (it asks for `sudo`, so the user runs it: suggest `! pnpm docker:dev:dns`); a line in `/etc/hosts` works for one address;
+- docker is unreachable — the user starts it (`colima start`).
 
-Ask both questions in a single `AskUserQuestion` call, in the user's language, with the recommended option first and the resolved values in the descriptions:
+`STATE=running` means this checkout's stand is already up (`RUNNING_ENV` shows its installation and `ENV`). It is the user's stand: ask in the same call whether to restart it or to use it as is (step 4).
 
-- **Окружение** — «На каком окружении проверять?»: `YC`, `YT`, `YC docker (локальная машина)`, `YT docker` — each with `<COMMAND>` and `<URL>` in the description, the recommended one marked `(Recommended)`. The built-in "Other" answer covers a different environment: the user types the start command and the address there. If either is missing from what they typed, ask for it before going on.
+The default auth file is `projects/yandex/tests/artifacts/auth.txt` (gitignored, per developer): a raw `curl` command copied from the browser's devtools, re-exported when it goes stale. A Playwright `storageState` JSON or a `Cookie:` header file works too. A new worktree does not have it — it lives in the main checkout; pass the main checkout's path (or `STAND_AUTH_FILE`) instead of asking the user to copy it.
+
+Ask the questions in a single `AskUserQuestion` call, in the user's language, with the recommended option first and the resolved values in the descriptions:
+
+- **Окружение** — «На каком окружении проверять?»: `YT`, `YC production`, `YC preprod` — each with `<COMMAND>` and `<URL>` in the description; the one matching `RUNNING_ENV` (or the change: a YC-only feature, a YT-only one) marked `(Recommended)`. The built-in "Other" answer covers a different environment: the user types the start command and the address there. If either is missing from what they typed, ask for it before going on.
 - **Авторизация** — «Какой файл использовать для авторизации?»: `<AUTH_FILE> (Recommended)`; `Другой файл` — the user gives the path.
+- **Стенд** — only when `STATE=running`: «Стенд этого checkout уже запущен (`<RUNNING_ENV>`). Что с ним сделать?»: `Перезапустить (Recommended)` — a clean start on the current code; `Использовать как есть` — faster, the dev server has picked up the source changes, but not a `.env`, dependency or installation change.
 
-Skip a question only when the user's request already answers it ("проверь на YT стенде" settles the installation, "в докере" / "локально" settles the mode; the auth file is still asked). If `AskUserQuestion` is not available (you run as a subagent), take the defaults and say in the report that you did.
+Skip a question only when the user's request already answers it ("проверь на YT стенде" settles the installation; the auth file is still asked). If `AskUserQuestion` is not available (you run as a subagent), take the defaults (restart included) and say in the report that you did.
 
 ## 2. Decide what to check
 
@@ -65,7 +76,7 @@ Before touching the browser, write yourself a short checklist of user-visible be
 
 ## 3. Check the auth file first
 
-Starting the stand takes from one minute (warm caches) to about five, so find out that the session is dead before that, not after.
+Starting the stand takes from one minute (warm caches) to well over ten (a new worktree installs its dependencies first), so find out that the session is dead before that, not after.
 
 The auth file contains live session cookies — never print its contents, and keep them out of the report.
 
@@ -83,46 +94,36 @@ bash -c "$(cat <auth-file>) -k -s -o /dev/null -w '%{http_code}\n'"    # 200 = s
   ```
 
   The same rewrite is how you call any other gateway action from the shell later (checking what a save actually persisted, probing backend rules).
-- The host belongs to a different installation than the chosen one (a `preprod.datalens.ru` export for a YT check) — the cookies will not authenticate there. Tell the user and ask for the right file.
+- The host belongs to a different installation than the chosen one (a `preprod.datalens.ru` export for a YT check, a production `datalens.ru` export for YC preprod) — the cookies will not authenticate there. Tell the user and ask for the right file.
 - The file is not a curl command (`storageState` JSON, `Cookie:` header) — skip the curl check; `cookies set --curl` in step 5 detects these formats itself. For JSON, check that the cookies' `expires` are in the future.
 
-## 3b. Native YT only: make sure TVM is healthy
+## 4. Stop this checkout's stand, then start it fresh
 
-The YT installation reaches internal services through a local `tvmtool` daemon. In native mode that is a daemon on the host (`NEEDS_TVM=1` from `stand-config.sh`); in docker mode it is the `tvmtool` container, fed from `.env` by the compose file, so there is nothing on the host to check or refresh and this step is skipped (`NEEDS_TVM=0`). Its config and daemon token come from Secretnica and go stale: when they do, the stand starts but every request to US and the other backends fails, which looks like a broken implementation. Check the daemon before starting the stand, on your own, without asking the user — but do not refresh it blindly on every run, a restart of `tvmtool` is noise when nothing is wrong:
+Skip this step when the user chose to use the running stand as is (step 1): go to step 5, and leave the stand running in step 7.
 
-```bash
-bash <skill-dir>/scripts/ensure-tvm.sh            # ENV=production in front for a prod-facing stand
-```
-
-The script compares the daemon state (`/tvm/ping` answering `OK`) and the files in `/etc/tvmtool`, `/var/lib/tvmtool` with the current secret in `yav`, and runs the repo's `projects/yandex/scripts/dev/setup-tvm-env.sh` only when something differs or the daemon is down. Exit codes:
-
-- `0` — healthy; the output says whether it was already fine or just refreshed. Mention a refresh in the report.
-- `1` — refreshed, still broken: the output has the commands to inspect the service. Stop and report, the stand would not work.
-- `2` — a prerequisite is missing (tvmtool not installed, no passwordless `sudo`, `yav` not logged in): the output has the exact command for the user. This is the one case that needs them.
-
-Skip this step entirely for YC (`TVM_DISABLED` there, see `docs/dev/installations.md`) and for both docker modes. The procedure the script automates is documented at https://wiki.yandex-team.ru/ct/lib/rabota-s-tvm-pri-razrabotke/.
-
-## 4. Stop every running stand, then start a fresh one
-
-Stop **all** dev stands before starting, including ones started outside this session or by the user — native processes and docker-mode containers alike. YT, YC and Public share one nginx host, and a stale instance keeps `dist/run/*.sock` bound (in docker mode: the ports and the 443 of the nginx container), so nginx answers 502 for the new stand or, worse, serves the old code — the check then verifies something other than the current implementation. Stands left running also pile up and eat memory until a build gets OOM-killed.
+Stop the stand of this checkout before starting, including one the user started in a terminal: a foreground `pnpm *:dev:docker*` keeps its dev-proxy and attached compose on the host, and a stand of the other installation holds the same compose project. Starting over it would either fail or leave you checking a stand built from another `ENV`.
 
 ```bash
 bash <skill-dir>/scripts/stop-stand.sh <stand-url>
 ```
 
-The script finds the processes (pnpm chain, `app-builder dev`, ts-checker, the node server), kills them by pid, stops the containers of the compose project `datalens-ui-yandex` (through `sudo -n docker` when the socket is root-only) and confirms nothing is left. Use it rather than `pkill -f '<pattern>'`: `pkill -f` matches the shell command line that contains the pattern and kills your own shell. For an "Other" environment whose start command the default patterns would miss, add `--pattern '<ere>'`. `--dry-run` only shows what would be stopped.
+The script kills the host processes whose working directory is inside this checkout (launcher, dev-proxy, attached compose, native `yc:dev:native`) by pid, then stops the checkout's containers with the launcher's `stop`, and confirms nothing of this checkout is left — no process, no running container, no listener on the stand's host ports (8010/8020 for the main checkout, the worktree's own pair otherwise). Exit 0 is the only "stopped": 1 means something is left or docker did not answer, 2 means the launcher did not name the stand and nothing was stopped — read the output and settle it (with the user if needed) before starting. Stands of other worktrees and the shared nginx are not touched — the same commands run there, only the working directory tells them apart. Use the script rather than `pkill -f '<pattern>'`: `pkill -f` matches the shell command line that contains the pattern and kills your own shell, and it would hit the other worktrees' stands. For an "Other" environment whose start command the default patterns would miss, add `--pattern '<ere>'`. `--dry-run` only shows what would be stopped.
 
-Then start the stand from the repo root as a background task, with the log in the scratchpad, and wait for it as a second background task:
+Then start the stand from the checkout root and wait for it as a background task:
 
 ```bash
-<COMMAND> > <scratchpad>/stand.log 2>&1                              # run_in_background
-bash <skill-dir>/scripts/wait-stand.sh <stand-url>   # run_in_background, exits when the stand answers
+<COMMAND> > <scratchpad>/stand-start.log 2>&1                                      # returns in seconds to minutes
+docker logs -f <CONTAINER> > <scratchpad>/stand.log 2>&1                           # run_in_background
+bash <skill-dir>/scripts/wait-stand.sh <stand-url> 1800 <CONTAINER>                # run_in_background
 ```
 
-- If the stand task exits before `wait-stand.sh` reports success, the start failed — read the tail of `stand.log`.
-- Docker mode is slower to come up: `docker-entry.js` first compares `pnpm-lock.yaml` with its saved hash and runs `pnpm install` inside the container when it changed, and the first run builds the image. Give `wait-stand.sh` a timeout of 1800 there. The address answers `000` (connection refused) until the nginx container is up and `502` until the app is.
+- `<COMMAND>` with `--detach` prepares `.env`, nginx and the host ports, creates the containers and exits; the app keeps starting inside the container. A non-zero exit means the launcher refused — read `stand-start.log`: a stand of the same name created from another directory (set `DEV_INSTANCE=<name>` after asking the user), a reserved name, a broken `.env`.
+- `stand-start.log` also carries the launcher's warnings: the host does not resolve here (step 1), or `dev.pem ... does not cover <host>` — the certificate has no wildcard for worktree addresses, the browser will refuse the stand; tell the user (`docs/dev/docker-credentials.md` → «Сертификат») rather than working around it.
+- `wait-stand.sh` gives up early, with the tail of the container log, when the container stops — the start failed. Otherwise the address answers `502` until the app listens.
+- The first start of a worktree is slow: the launcher copies `.env` and the certificates from the main checkout, the container installs dependencies (`pnpm install`, from the shared pnpm store) and builds from scratch. If the install hangs or aborts on a pnpm confirmation, stop the stand and start again with `CI=true` in front of `<COMMAND>`.
+- A worktree's `.env` is a copy made at its first start and is not refreshed afterwards. For YC production it holds `SERVICE_ACCOUNT_IAM_TOKEN`, which expires in 12 hours: a 500 on `/` with `failed to fetch token from metadata service` in `stand.log` means a stale token — tell the user (`docs/dev/running.md` → YC), it is not the change under test.
 - "Stand is up" means nginx reaches the server. The client bundle may still be compiling: a blank page or a "compiling" overlay right after start means wait and reload, not a bug.
-- Do not run `pnpm typecheck` next to a running stand — together they run out of memory. Typecheck and lint belong after the stand is stopped.
+- Do not run `pnpm typecheck` next to a running stand — together they run out of memory. Typecheck and lint belong after the stand is stopped. Several worktree stands running at once compete for the docker VM's memory too: if the build gets OOM-killed, show the user `pnpm docker:dev:list` and let them decide what to stop.
 
 ## 5. Open the stand in agent-browser
 
@@ -140,11 +141,11 @@ Confirm you are authenticated before checking anything: the app UI renders, not 
 
 Go through the checklist from step 2. For each item, collect evidence instead of an impression: a `snapshot` or `eval` reading of the relevant text or value, a `screenshot` saved to the scratchpad for anything visual, the request payload when the change is about what gets sent.
 
-The backend behind the stand is real (preprod by default, see `docs/dev/installations.md`). Every mutation the browser fires — create, save, delete — really happens. Creating clearly named test entities of your own is fine; changing or deleting entities you did not create is not, unless the user asked. Note what you leave behind for the report.
+The backend behind the stand is real (production for YC production, preprod otherwise, see `docs/dev/installations.md`). Every mutation the browser fires — create, save, delete — really happens. Creating clearly named test entities of your own is fine; changing or deleting entities you did not create is not, unless the user asked. Note what you leave behind for the report.
 
 When a flow cannot be exercised for real (the tenant lacks the needed entities, or the action is destructive), mock the backend calls — and read [`references/agent-browser-notes.md`](references/agent-browser-notes.md) first: the obvious tool, `network route`, silently does not work on the stand. The same file has the widget-level tricks (Gravity `Select`, clearing a `TextInput`, `DateField`, toasts, drag and drop, reading form state) and the DataLens selectors that held up — open it as soon as a click or a `fill` does not do what you expected, rather than retrying variations.
 
-If a check fails because of the implementation and you are the one implementing it in this conversation, fix it and re-check — the dev server picks the change up. If you were only asked to verify, record the failure with its evidence and go on with the rest of the checklist.
+If a check fails because of the implementation and you are the one implementing it in this conversation, fix it and re-check — the dev server in the container picks the change up. If you were only asked to verify, record the failure with its evidence and go on with the rest of the checklist.
 
 ## 7. Stop the stand — always
 
@@ -152,17 +153,17 @@ When the checks are done, or abandoned for any reason (dead auth discovered late
 
 ```bash
 agent-browser --session <name> close
-bash <skill-dir>/scripts/stop-stand.sh <stand-url>
+bash <skill-dir>/scripts/stop-stand.sh <stand-url>          # not for a stand the user chose to keep as is
 ```
 
-The script must end with no processes left, no containers left, no `dist/run` listeners and the stand answering 502 (or 000, once the docker nginx is gone). Do this before writing the report, so the report can state it as done.
+Stop the background `docker logs -f` task too. The script must exit 0 — no processes, no running containers and no port listeners of this checkout — with the stand answering 502 — the shared nginx stays up and answers for the other stands. Do this before writing the report, so the report can state it as done. A stand you used as is (step 1) or one the user pointed you at stays running: close only your browser session.
 
 ## 8. Report
 
 Short, with the outcome first:
 
-- installation, address and auth file used (and whether they were defaults taken without asking);
+- installation, checkout (main or worktree, `INSTANCE`), address and auth file used (and whether they were defaults taken without asking);
 - each checklist item: passed / failed / could not be checked, with the evidence that decided it;
 - what ran against the real backend and what was mocked — a mocked run verifies the UI only, say so;
 - entities created or left behind on the backend;
-- confirmation that the stand is stopped.
+- confirmation that this checkout's stand is stopped, or that it was left running because it was the user's.

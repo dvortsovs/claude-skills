@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
 # Wait until the dev stand answers through nginx (anything but 502/503/504 or no connection).
 #
-#   wait-stand.sh <stand-url> [timeout-seconds=900]
+#   wait-stand.sh <stand-url> [timeout-seconds=900] [container]
 #
-# Exit code 0 when the stand is up, 1 on timeout.
+#   container   the stand's application container (CONTAINER from stand-config.sh): when docker
+#               reports it stopped while waiting, the start has failed — print the tail of its log and
+#               give up at once; an empty or failed `docker inspect` (docker hiccup) is polled again
+#
+# Exit code 0 when the stand is up, 1 on timeout or a stopped container.
 set -u
 
 usage() {
-    sed -n '2,6p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"
 }
 
 case "${1:-}" in
@@ -20,7 +24,9 @@ esac
 
 URL=$1
 TIMEOUT=${2:-900}
+CONTAINER=${3:-}
 POLL_INTERVAL=10
+LOG_TAIL=40
 
 start=$(date +%s)
 while :; do
@@ -33,6 +39,11 @@ while :; do
             exit 0
             ;;
     esac
+    if [ -n "$CONTAINER" ] && [ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null)" = false ]; then
+        echo "container $CONTAINER is not running after ${elapsed}s, the start failed; last log lines:"
+        docker logs --tail "$LOG_TAIL" "$CONTAINER" 2>&1
+        exit 1
+    fi
     if [ "$elapsed" -ge "$TIMEOUT" ]; then
         echo "stand did not come up in ${TIMEOUT}s, last answer HTTP $code"
         exit 1
