@@ -81,3 +81,10 @@ stand_ports() {
 print_usage() {
     awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$1"
 }
+
+# The main checkout of this repository (the checkout itself when it is not a linked worktree)
+main_checkout() {
+    local common
+    common=$(cd "$REPO_ROOT" && git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 1
+    (cd "$(dirname "$common")" && pwd -P)
+}

@@ -48,12 +48,12 @@ You are the **orchestrator**. You do not design, write or review code yourself: 
 4. **Codex is usable:** `command -v codex`. If it is missing or a later run fails with an auth error, tell the user (`codex login`) — do not silently drop the Codex roles. Continuing with Claude-only critics and reviewers is the user's call, ask.
 5. **Ask once, up front, in a single `AskUserQuestion`** (in the user's language), so the rest of the cycle can run unattended:
    - **Стенд** — which installation the tester will use: `YT`, `YC production`, `YC preprod`, `Без проверки на стенде`. The stand is the docker stand of the current checkout (the main one or a git worktree — each runs its own, see stand-check «One stand per checkout»). To show real commands and addresses in the descriptions, run `<skill-dir>/../stand-check/scripts/stand-config.sh` (stand-check ships in the same plugin) with `yt`, `yc`, `yc-preprod` from the checkout root. An installation whose `stand-config.sh` exits 1 (address unknown) or prints a non-empty `WARNING` (the host does not resolve to this machine, docker is down) carries that in its option description, as stand-check step 1 does; if the user picks it, settle it (the user gives the address, runs `pnpm docker:dev:dns` or fixes `/etc/hosts`, starts docker) before going on, and keep a given address as `STAND_URL` for step 5. Exit 2 (the checkout has no per-worktree launcher) — tell the user to rebase on `main`.
-   - **Авторизация** — `projects/yandex/tests/artifacts/auth.txt (Recommended)` or another file. In a worktree the file usually lives only in the main checkout: offer that path.
+   - **Авторизация** — only when `<skill-dir>/../stand-check/scripts/prepare-auth.sh --dry-run` reports `AUTH_STATUS=would-copy` (a new worktree without its own auth file; the dry run copies nothing): «В worktree нет файла авторизации. Если стенд нужен, скопирую его из основного checkout в `<AUTH_FILE>` — обновите его до тестов: свежий запрос из devtools как cURL в этот файл.» — `Обновлю после копирования (Recommended)` / `Использовать копию как есть`.
    - **Утверждение плана** — `Показать план перед разработкой (Recommended)` / `Не останавливаться`.
 
    The number of parallel testers is not asked: the default is up to 3 (step 5); the user can set it in the request ("тестеров: 2", "один тестировщик").
 
-   Each question has at most four options (the `AskUserQuestion` schema allows 2–4). Skip a question the request already answers; drop **Авторизация** when the stand is skipped. When `stand-config.sh` reports `STATE=running`, this checkout's stand is already up and is the user's: tell them in the **Стенд** question that step 5 restarts it.
+   Each question has at most four options (the `AskUserQuestion` schema allows 2–4). Skip a question the request already answers. The auth file is this checkout's `projects/yandex/tests/artifacts/auth.txt`, or the one the user names in the request (pass it as `STAND_AUTH_FILE=<path>` to the stand-check scripts, here and in step 5). After the answers, and only when the stand is not skipped, run `prepare-auth.sh` without `--dry-run`: it copies the file in a new worktree (exit 3 — the copy failed, tell the user). `AUTH_STATUS=missing` from the dry run — ask for a file in the same call (`Без проверки на стенде` makes it unnecessary). Whether the refreshed file is alive is checked in step 5b. When `stand-config.sh` reports `STATE=running`, this checkout's stand is already up and is the user's: tell them in the **Стенд** question that step 5 restarts it.
 
 Tell the user in one line that the cycle has started and where the artifacts are.
 
@@ -123,7 +123,7 @@ You own the stand; the testers only attach to it. The stand is the docker stand 
 
 ```bash
 bash <sc>/scripts/stand-config.sh <yt|yc|yc-preprod>        # URL, CONTAINER, COMMAND, COOKIE_DOMAIN, WARNING
-# step 3: the auth curl check from stand-check (never print the file)
+# step 3: prepare-auth.sh + the auth curl check from stand-check (never print the file)
 bash <sc>/scripts/stop-stand.sh <url>                       # this checkout's stand only
 <COMMAND> > <run>/test/stand-start-rN.log 2>&1              # --detach: returns once the containers are up
 docker logs -f <CONTAINER> > <run>/test/stand-rN.log 2>&1   # run_in_background

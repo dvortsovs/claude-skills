@@ -1,6 +1,6 @@
 ---
 name: stand-check
-description: Verify the current implementation on the developer's own live docker dev stand in a real browser — asks which installation (YT / YC production / YC preprod / other) and which auth file to use, resolves the stand of the current checkout (the main one or a git worktree, each runs its own stand) with the repo's launcher, restarts only that stand, drives the UI with agent-browser, then stops that stand and reports. Use whenever the user says «проверить на стенде», «проверь на стенде», «проверка на стенде», «посмотри на стенде», "check on the stand", "verify on the dev stand", or otherwise asks to see a change working on their stand — even when they name neither agent-browser nor the start command.
+description: Verify the current implementation on the developer's own live docker dev stand in a real browser — asks which installation (YT / YC production / YC preprod / other), takes the checkout's own auth file (copying it from the main checkout into a new worktree and asking the user to refresh it), resolves the stand of the current checkout (the main one or a git worktree, each runs its own stand) with the repo's launcher, restarts only that stand, drives the UI with agent-browser, then stops that stand and reports. Use whenever the user says «проверить на стенде», «проверь на стенде», «проверка на стенде», «посмотри на стенде», "check on the stand", "verify on the dev stand", or otherwise asks to see a change working on their stand — even when they name neither agent-browser nor the start command.
 ---
 
 # Stand check
@@ -58,15 +58,14 @@ The addresses come from the launcher (`docker-stand.js info`), not from a templa
 
 `STATE=running` means this checkout's stand is already up (`RUNNING_ENV` shows its installation and `ENV`). It is the user's stand: ask in the same call whether to restart it or to use it as is (step 4).
 
-The default auth file is `projects/yandex/tests/artifacts/auth.txt` (gitignored, per developer): a raw `curl` command copied from the browser's devtools, re-exported when it goes stale. A Playwright `storageState` JSON or a `Cookie:` header file works too. A new worktree does not have it — it lives in the main checkout; pass the main checkout's path (or `STAND_AUTH_FILE`) instead of asking the user to copy it.
+The auth file is `projects/yandex/tests/artifacts/auth.txt` **of the checkout under test** (gitignored, per developer; `AUTH_FILE` is its absolute path): a raw `curl` command copied from the browser's devtools, re-exported when it goes stale. A Playwright `storageState` JSON or a `Cookie:` header file works too. It is not asked about — step 3 prepares it. When the user names another file in the request, put `STAND_AUTH_FILE=<that path>` in front of `stand-config.sh` and `prepare-auth.sh` (relative paths are taken from the checkout root): then nothing is copied.
 
 Ask the questions in a single `AskUserQuestion` call, in the user's language, with the recommended option first and the resolved values in the descriptions:
 
 - **Окружение** — «На каком окружении проверять?»: `YT`, `YC production`, `YC preprod` — each with `<COMMAND>` and `<URL>` in the description; the one matching `RUNNING_ENV` (or the change: a YC-only feature, a YT-only one) marked `(Recommended)`. The built-in "Other" answer covers a different environment: the user types the start command and the address there. If either is missing from what they typed, ask for it before going on.
-- **Авторизация** — «Какой файл использовать для авторизации?»: `<AUTH_FILE> (Recommended)`; `Другой файл` — the user gives the path.
 - **Стенд** — only when `STATE=running`: «Стенд этого checkout уже запущен (`<RUNNING_ENV>`). Что с ним сделать?»: `Перезапустить (Recommended)` — a clean start on the current code; `Использовать как есть` — faster, the dev server has picked up the source changes, but not a `.env`, dependency or installation change.
 
-Skip a question only when the user's request already answers it ("проверь на YT стенде" settles the installation; the auth file is still asked). If `AskUserQuestion` is not available (you run as a subagent), take the defaults (restart included) and say in the report that you did.
+Skip a question only when the user's request already answers it ("проверь на YT стенде" settles the installation). If `AskUserQuestion` is not available (you run as a subagent), take the defaults (restart included) and say in the report that you did.
 
 ## 2. Decide what to check
 
@@ -79,6 +78,19 @@ Before touching the browser, write yourself a short checklist of user-visible be
 Starting the stand takes from one minute (warm caches) to well over ten (a new worktree installs its dependencies first), so find out that the session is dead before that, not after.
 
 The auth file contains live session cookies — never print its contents, and keep them out of the report.
+
+First make sure the checkout has its own file:
+
+```bash
+bash <skill-dir>/scripts/prepare-auth.sh        # AUTH_FILE, AUTH_STATUS, COPIED_FROM
+```
+
+- `AUTH_STATUS=present` — use it, nothing to ask.
+- `AUTH_STATUS=copied` — a new worktree had no file, so the main checkout's one was copied to `AUTH_FILE`. The copy may be stale and from now on is this worktree's own, so ask the user to refresh it, with `AskUserQuestion`: «В worktree не было файла авторизации — скопировал его из основного checkout в `<AUTH_FILE>`. Обновите его: скопируйте из devtools свежий запрос как cURL и сохраните в этот файл.» — options `Обновил файл (Recommended)` and `Продолжить с копией`. Then run the checks below on whatever is in the file; if the copy turns out dead, ask for the refresh again instead of going on. As a subagent without `AskUserQuestion`, go on with the copy and say in the report that it was copied and should be refreshed.
+- `AUTH_STATUS=missing` (exit 1) — no file here or in the main checkout, or the file the user named does not exist: ask the user to export one into `AUTH_FILE`; do not start the stand without it.
+- exit 3 — the copy failed (the message says why); nothing was left behind. Tell the user, do not start the stand.
+
+Then check the session:
 
 ```bash
 grep -oE "^curl '[^']+'" <auth-file>                                  # which host it was exported from
@@ -162,7 +174,7 @@ Stop the background `docker logs -f` task too. The script must exit 0 — no pro
 
 Short, with the outcome first:
 
-- installation, checkout (main or worktree, `INSTANCE`), address and auth file used (and whether they were defaults taken without asking);
+- installation, checkout (main or worktree, `INSTANCE`), address and auth file used (and whether it was copied from the main checkout and refreshed or not; which values were defaults taken without asking);
 - each checklist item: passed / failed / could not be checked, with the evidence that decided it;
 - what ran against the real backend and what was mocked — a mocked run verifies the UI only, say so;
 - entities created or left behind on the backend;

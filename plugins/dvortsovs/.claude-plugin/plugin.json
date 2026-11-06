@@ -1,6 +1,6 @@
 {
   "name": "dvortsovs",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "dvortsovs's personal skill namespace for Claude Code. Ships stand-check: verifying a change in a real browser on the developer's own DataLens docker dev stand of the current checkout or git worktree (YT / YC) with agent-browser; and task-cycle: running a task through a team of agents — Fable architect, Claude + Codex critics, developer, Claude + Codex reviewers, stand tester.",
   "author": {
     "name": "Sevastian Dvortsov",

@@ -37,8 +37,9 @@ From a shell: `claude plugin marketplace update dvortsovs-skills`, then
 
 Verifies the change you are working on in a real browser against your own
 DataLens docker dev stand, end to end: asks which installation (YT / YC
-production / YC preprod / other) and which auth file to use, checks that the
-auth session is alive before spending minutes on a build, restarts the stand of
+production / YC preprod / other), takes the checkout's own auth file (copying
+it from the main checkout into a new worktree and asking you to refresh it),
+checks that the auth session is alive before spending minutes on a build, restarts the stand of
 the current checkout — the main one or a git worktree, each runs its own —
 leaving the other worktrees' stands and the shared nginx alone, drives the UI
 with [agent-browser](https://www.npmjs.com/package/agent-browser) against the
@@ -97,7 +98,7 @@ YT and YC replace each other.
 | The stand address resolving to `127.0.0.1`: `pnpm docker:dev:dns` once for all worktree stands, or `/etc/hosts` | the browser reaches the local nginx |
 | A checkout that has `docker-stand.js` (worktrees on old branches don't) | per-checkout stands |
 | `npm i -g agent-browser` | the browser |
-| `projects/yandex/tests/artifacts/auth.txt` | a curl command copied from the browser devtools with a live session (gitignored); a Playwright `storageState` JSON works too |
+| `projects/yandex/tests/artifacts/auth.txt` in the checkout under test | a curl command copied from the browser devtools with a live session (gitignored); a Playwright `storageState` JSON works too. A new worktree gets a copy of the main checkout's file, to be refreshed |
 
 Overrides: `STAND_URL`, `STAND_AUTH_FILE`, `STAND_REPO_ROOT`, `STAND_ENV` in the
 environment; `DEV_INSTANCE` and `PROJECT_NAME` go to the launcher.
@@ -110,6 +111,7 @@ All under `plugins/dvortsovs/skills/stand-check/scripts/`, each with `--help`:
 |---|---|
 | `stand-config.sh <yt\|yc\|yc-preprod>` | prints this checkout's instance, container and its state, the start command, stand URL (and what it resolves to), cookie domain and auth file |
 | `stop-stand.sh [--dry-run] [--pattern <ere>] [url]` | stops this checkout's stand: host processes started from it, by pid, and its containers; confirms no process, container or host-port listener of it is left (exit 0), or says what is left or unknown (1, 2) |
+| `prepare-auth.sh [--dry-run]` | resolves this checkout's auth file; in a new worktree copies the main checkout's one there (never prints its contents) |
 | `wait-stand.sh <url> [timeout] [container]` | polls until the stand answers through nginx, gives up early when the container stops |
 
 ---
@@ -127,8 +129,9 @@ you invoke it in acting as the orchestrator:
 | code review | two reviewers, in parallel; changes requested → back to the developer (max 3 rounds) | Claude Opus subagent + `codex exec`, frontier model |
 | test | 1–4 testers in parallel on **one** stand the orchestrator starts and stops; each takes a group of the plan's stand checklist and runs `dvortsovs:stand-check` in attached mode with its own browser session and entity prefix | Claude Opus subagents |
 
-All questions are asked once at the start (stand installation, auth file,
-whether to stop for plan approval), so the rest runs unattended until a loop
+All questions are asked once at the start (stand installation, refreshing a
+worktree's copied auth file, whether to stop for plan approval), so the rest
+runs unattended until a loop
 hits its round limit. Plans, critiques, reviews and test reports go to
 `.git/task-cycle/<slug>-<timestamp>/` of the target repo — readable by every
 agent, never committed. Nothing is committed or pushed unless you ask.

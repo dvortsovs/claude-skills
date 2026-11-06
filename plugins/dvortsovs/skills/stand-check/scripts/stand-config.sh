@@ -20,7 +20,7 @@
 #   URL            the stand address
 #   RESOLVES_TO    what the stand host resolves to on this machine (empty when it does not resolve)
 #   COOKIE_DOMAIN  the domain to set the auth cookies for in agent-browser
-#   AUTH_FILE      the auth file to pass to `agent-browser cookies set --curl`
+#   AUTH_FILE      this checkout's auth file (absolute; prepare-auth.sh creates it in a new worktree)
 #   WARNING        a problem the caller should confirm with the user (host not pointing here, docker down)
 #
 # Overrides (environment): STAND_URL, STAND_AUTH_FILE, STAND_REPO_ROOT, STAND_ENV (the app's ENV — a
@@ -138,7 +138,12 @@ echo "COMMAND=ENV=${APP_ENV} pnpm run ${SCRIPT} --detach"
 echo "URL=${URL}"
 echo "RESOLVES_TO=${RESOLVES_TO}"
 echo "COOKIE_DOMAIN=${COOKIE_DOMAIN}"
-echo "AUTH_FILE=${STAND_AUTH_FILE:-$DEFAULT_AUTH_FILE}"
+case "${STAND_AUTH_FILE:-}" in
+    '') AUTH_FILE="${REPO_ROOT}/${DEFAULT_AUTH_FILE}" ;;
+    /*) AUTH_FILE=$STAND_AUTH_FILE ;;
+    *) AUTH_FILE="${REPO_ROOT}/${STAND_AUTH_FILE}" ;;
+esac
+echo "AUTH_FILE=${AUTH_FILE}"
 echo "WARNING=${WARNING}"
 
 if [ -z "$URL" ]; then
