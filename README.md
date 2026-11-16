@@ -161,3 +161,47 @@ spends a lot of tokens of two providers.
 Codex runs read-only (`-s read-only --ephemeral`) through
 `scripts/codex-run.sh`. Overrides: `TASK_CYCLE_CODEX_MODEL` (default
 `gpt-6-astra`), `TASK_CYCLE_CODEX_EFFORT` (default `xhigh`).
+
+---
+
+## `dvortsovs:i18n-screenshots`
+
+Screenshots of i18n keys for translators. Forked from `dr33m:i18n-screenshots`.
+Every key awaiting translation (`REQUIRES_TRANSLATION`, changed in the branch)
+gets a red arrow from a label with its key name to the text it renders.
+
+- **Full viewport, never cropped**: the page is shown as the user sees it,
+  with labels (red monospace on black) at the left and right edges, arrows to
+  the texts, and a caption with the keysets and the state at the bottom left.
+  Keys that are not visible text are marked `(title)`, `(aria-label)`,
+  `(placeholder)` and point at the element carrying the attribute.
+- **As few screenshots as possible**: everything that can be on screen at once
+  goes into one shot — a dialog, a nested dialog, an open menu, attribute
+  texts, list items staged with mocked data so every variant renders side by
+  side. A new screenshot only for mutually exclusive texts.
+- **On your own stand**: the stand of the current checkout is brought up and
+  stopped through `dvortsovs:stand-check` (same questions, same auth file),
+  the pages are driven with agent-browser.
+- **Output**: `i18n-screenshots/<branch>/NN-<screen>.png` in the checkout
+  root, kept out of git through `.git/info/exclude`.
+
+The workflow and the reference look are in
+[SKILL.md](plugins/dvortsovs/skills/i18n-screenshots/SKILL.md).
+
+### Usage
+
+```text
+/dvortsovs:i18n-screenshots
+сделай скриншоты ключей для переводчиков
+```
+
+### Scripts
+
+All under `plugins/dvortsovs/skills/i18n-screenshots/scripts/`, each with `--help`:
+
+| Script | Does |
+|---|---|
+| `keys.mjs` | lists the keys to shoot; `--coverage screens.json` checks the plan covers them |
+| `launch.sh <session> <url> <auth-file> <cookie-domain>` | starts an agent-browser session with the mock stub, the cookies, a 1600×1000@2x viewport and the light theme |
+| `shoot.sh <session> <screens.json> <screen> <out-dir>` | draws the labels and arrows over the current page, saves the viewport, reports missing / offscreen / covered keys |
+| `render.mjs`, `annotate.js`, `stub.js` | the overlay script with texts from the keysets, the overlay itself, XHR/fetch mocks and `window.DL` overrides |
